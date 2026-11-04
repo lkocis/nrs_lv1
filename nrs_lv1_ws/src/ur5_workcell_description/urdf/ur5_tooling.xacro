@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find robotiq_3f_description)/urdf/robotiq_3f.xacro"/>
+  <xacro:include filename="$(find robotiq_ft300s_description)/urdf/robotiq_ft300s.xacro"/>
+
+  <xacro:macro name="ur5_workcell_tooling"
+               params="tool0 prefix:='' include_cable_plugs:=true articulated_gripper:=true gripper_joint_damping:=1.0 gripper_joint_friction:=0.1">
+
+    <!-- 1) senzor na tool0 -->
+    <xacro:robotiq_ft300s parent="${tool0}" prefix="${prefix}">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </xacro:robotiq_ft300s>
+
+    <!-- 2) okvir na kraju senzora, na njega ide šaka -->
+    <link name="${prefix}gripper_mount_link"/>
+    <joint name="${prefix}ft300_to_gripper_mount_joint" type="fixed">
+      <parent link="${prefix}ft_measurement_frame"/>
+      <child link="${prefix}gripper_mount_link"/>
+      <origin xyz="0 0 0" rpy="0 0 -1.5707963267948966"/>
+    </joint>
+
+    <!-- 3) šaka, isto kao u originalu, samo je parent novi okvir -->
+    <xacro:robotiq_3f_gripper parent="${prefix}gripper_mount_link" prefix="${prefix}"
+      include_cable_plugs="${include_cable_plugs}" articulated="${articulated_gripper}"
+      joint_damping="${gripper_joint_damping}" joint_friction="${gripper_joint_friction}">
+      <origin xyz="0 0 0.0127" rpy="1.5707963267948966 0 -0.7853981633974483"/>
+    </xacro:robotiq_3f_gripper>
+
+    <!-- 4) okvir vrška prsta -->
+    <link name="${prefix}finger_contact_tip"/>
+    <joint name="${prefix}finger_contact_tip_joint" type="fixed">
+      <parent link="${prefix}AGS_finger-dist002"/>
+      <child link="${prefix}finger_contact_tip"/>
+      <origin xyz="0 0.005 0.038" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>

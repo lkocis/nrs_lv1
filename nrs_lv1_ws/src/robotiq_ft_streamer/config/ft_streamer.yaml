@@ -1,0 +1,16 @@
+robotiq_ft_streamer:
+  ros__parameters:
+    # The launch file requires robot_ip and overrides this empty value.
+    robot_ip: ""
+    sensor_port: 63351
+    frame_id: ft_measurement_frame
+    wrench_topic: /robotiq_ft_sensor/wrench
+    publish_rate_hz: 100.0
+    startup_zero: false
+    zero_sample_count: 100
+    zero_timeout_sec: 5.0
+    connect_timeout_sec: 3.0
+    read_timeout_sec: 1.0
+    stale_timeout_sec: 5.0
+    reconnect_delay_sec: 2.0
+    max_buffer_bytes: 65536

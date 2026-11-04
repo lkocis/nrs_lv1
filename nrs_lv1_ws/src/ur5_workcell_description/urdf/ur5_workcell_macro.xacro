@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="$(find ur5_workcell_description)/urdf/ur5_tooling.xacro"/>
+
+  <xacro:macro name="ur5_workcell" params="
+    name
+    parent
+    tf_prefix
+    joint_limits_parameters_file
+    kinematics_parameters_file
+    physical_parameters_file
+    visual_parameters_file
+    safety_limits:=false
+    safety_pos_margin:=0.15
+    safety_k_position:=20
+    force_abs_paths:=false
+    include_cable_plugs:=true
+    articulated_gripper:=true
+    gripper_joint_damping:=1.0
+    gripper_joint_friction:=0.1
+    *origin">
+
+    <xacro:ur_robot
+      name="${name}"
+      tf_prefix="${tf_prefix}"
+      parent="${parent}"
+      joint_limits_parameters_file="${joint_limits_parameters_file}"
+      kinematics_parameters_file="${kinematics_parameters_file}"
+      physical_parameters_file="${physical_parameters_file}"
+      visual_parameters_file="${visual_parameters_file}"
+      safety_limits="${safety_limits}"
+      safety_pos_margin="${safety_pos_margin}"
+      safety_k_position="${safety_k_position}"
+      force_abs_paths="${force_abs_paths}">
+      <xacro:insert_block name="origin"/>
+    </xacro:ur_robot>
+
+    <xacro:ur5_workcell_tooling
+      tool0="${tf_prefix}tool0"
+      prefix="${tf_prefix}"
+      include_cable_plugs="${include_cable_plugs}"
+      articulated_gripper="${articulated_gripper}"
+      gripper_joint_damping="${gripper_joint_damping}"
+      gripper_joint_friction="${gripper_joint_friction}"/>
+
+  </xacro:macro>
+</robot>

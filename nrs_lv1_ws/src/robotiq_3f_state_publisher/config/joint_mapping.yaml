@@ -1,0 +1,37 @@
+/**:
+  ros__parameters:
+    status_topic: /robotiq_3f/status
+    joint_states_topic: /joint_states
+    tf_prefix: ""
+    publish_rate_hz: 20.0
+
+    # Publish the reviewed Basic/open reference until activated hardware status
+    # arrives. This preserves the old fixed-model appearance when the backend
+    # is disabled. Once a valid status arrives, the last measured pose is held.
+    publish_reference_without_status: true
+    require_activated_status: true
+
+    # Free-space mapping fitted from the 2026-09-04 physical calibration CSV.
+    # Basic and Wide samples agreed across all three fingers. Pinch saturates
+    # near raw 112/113, so actual feedback (not the request) remains decisive.
+    # Values outside the sampled 6..240 interval are held at its endpoints.
+    finger:
+      breakpoints: [0, 6, 32, 60, 96, 128, 148, 164, 192, 225, 240, 255]
+      proximal_rad: [0.0, 0.0, 0.20943951023931956, 0.4886921905584123, 0.7853981633974483, 1.0777408131064985, 1.0777408131064985, 1.0777408131064985, 1.0777408131064985, 1.0777408131064985, 1.0777408131064985, 1.0777408131064985]
+      middle_rad: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.08726646259971647, 0.4363323129985824, 0.9337511498169663, 1.3089969389957472, 1.509709802975095, 1.509709802975095]
+      distal_rad: [0.0, 0.0, -0.2792526803190927, -0.5148721293383273, -0.7853981633974483, -1.0777408131064985, -0.6894050545377601, -0.6894050545377601, -0.6894050545377601, -0.6894050545377601, -0.6894050545377601, -0.6894050545377601]
+
+    # Pinch follows the same curve through raw 96, then reaches its measured
+    # limit at 49 degrees near raw A=112 and B/C=113.
+    pinch_finger:
+      breakpoints: [0, 6, 32, 60, 96, 112, 113, 255]
+      proximal_rad: [0.0, 0.0, 0.20943951023931956, 0.4886921905584123, 0.7853981633974483, 0.8552113334772214, 0.8552113334772214, 0.8552113334772214]
+      middle_rad: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      distal_rad: [0.0, 0.0, -0.2792526803190927, -0.5148721293383273, -0.7853981633974483, -0.8552113334772214, -0.8552113334772214, -0.8552113334772214]
+
+    # Measured B-scissor angle. Finger C receives the negative of this curve.
+    # Repeated mode anchors use the median manual fit (Wide raw 24 and Pinch
+    # raw 220); Scissor-mode samples fill the remaining travel.
+    scissor:
+      breakpoints: [0, 15, 24, 32, 60, 92, 128, 137, 164, 192, 220, 225, 233, 255]
+      angle_rad: [0.2399827721492203, 0.2399827721492203, 0.22252947962927702, 0.20943951023931956, 0.14835298641951802, 0.08726646259971647, 0.017453292519943295, 0.0, -0.05235987755982989, -0.10471975511965978, -0.16406094968746698, -0.1684242728174528, -0.17016960206944712, -0.17016960206944712]

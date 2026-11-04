@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="robotiq_ft300s" params="parent prefix:='' *origin">
+    <joint name="${prefix}ft300_mount_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}ft300_mounting_plate"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+
+    <link name="${prefix}ft300_mounting_plate">
+      <visual>
+        <geometry>
+          <mesh filename="package://robotiq_ft300s_description/meshes/visual/mountings/robotiq_ft300-G-062-COUPLING_G-50-4M6-1D6_20181119.STL"/>
+        </geometry>
+        <material name="Robotiq-Grey"><color rgba="0.4 0.4 0.4 1.0"/></material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://robotiq_ft300s_description/meshes/collision/mountings/robotiq_ft300-G-062-COUPLING_G-50-4M6-1D6_20181119.STL"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <link name="${prefix}ft300_sensor">
+      <visual>
+        <geometry>
+          <mesh filename="package://robotiq_ft300s_description/meshes/visual/robotiq_ft300.STL"/>
+        </geometry>
+        <material name="Robotiq-Black"><color rgba="0.2 0.2 0.2 1.0"/></material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://robotiq_ft300s_description/meshes/collision/robotiq_ft300.STL"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 -0.017" rpy="0 0 0"/>
+        <mass value="0.300"/>
+        <inertia ixx="0.000262" ixy="0" ixz="0.000001"
+                 iyy="0.000265" iyz="0.000001" izz="0.000219"/>
+      </inertial>
+    </link>
+
+    <joint name="${prefix}ft300_mounting_plate_to_sensor_joint" type="fixed">
+      <parent link="${prefix}ft300_mounting_plate"/>
+      <child link="${prefix}ft300_sensor"/>
+      <origin xyz="0 0 0.0415" rpy="0 3.141592653589793 0"/>
+    </joint>
+
+    <link name="${prefix}ft_measurement_frame"/>
+    <joint name="${prefix}ft_measurement_joint" type="fixed">
+      <parent link="${prefix}ft300_sensor"/>
+      <child link="${prefix}ft_measurement_frame"/>
+      <origin xyz="0 0 0" rpy="0 3.141592653589793 -1.5707963267948966"/>
+    </joint>
+  </xacro:macro>
+</robot>

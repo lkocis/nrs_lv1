@@ -1,0 +1,109 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="ur5_workcell">
+  <xacro:arg name="name" default="ur5_workcell"/>
+  <xacro:arg name="ur_type" default="ur5"/>
+  <xacro:arg name="tf_prefix" default=""/>
+
+  <xacro:arg name="joint_limit_params"
+    default="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"/>
+  <xacro:arg name="kinematics_params"
+    default="$(find ur5_workcell_description)/config/ur5_calibration.yaml"/>
+  <xacro:arg name="physical_params"
+    default="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"/>
+  <xacro:arg name="visual_params"
+    default="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"/>
+  <xacro:arg name="safety_limits" default="true"/>
+  <xacro:arg name="safety_pos_margin" default="0.15"/>
+  <xacro:arg name="safety_k_position" default="20"/>
+  <xacro:arg name="simulation_controllers"
+    default="$(find ur5_workcell_sim)/config/ur_controllers.yaml"/>
+
+  <xacro:arg name="articulated_gripper" default="true"/>
+
+  <xacro:include
+    filename="$(find ur5_workcell_description)/urdf/ur5_workcell_macro.xacro"/>
+  <xacro:include
+    filename="$(find ur5_workcell_description)/urdf/workcell_environment.xacro"/>
+  <xacro:include
+    filename="$(find ur_simulation_gz)/urdf/ur_gz.ros2_control.xacro"/>
+
+  <link name="world"/>
+  <link name="$(arg tf_prefix)workcell_reference"/>
+  <joint name="$(arg tf_prefix)workcell_reference_joint" type="fixed">
+    <parent link="world"/>
+    <child link="$(arg tf_prefix)workcell_reference"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Simulated finger motors use no passive damping or friction. -->
+  <xacro:ur5_workcell
+    name="$(arg name)"
+    parent="$(arg tf_prefix)workcell_reference"
+    tf_prefix="$(arg tf_prefix)"
+    joint_limits_parameters_file="$(arg joint_limit_params)"
+    kinematics_parameters_file="$(arg kinematics_params)"
+    physical_parameters_file="$(arg physical_params)"
+    visual_parameters_file="$(arg visual_params)"
+    safety_limits="$(arg safety_limits)"
+    safety_pos_margin="$(arg safety_pos_margin)"
+    safety_k_position="$(arg safety_k_position)"
+    force_abs_paths="true"
+    include_cable_plugs="true"
+    articulated_gripper="$(arg articulated_gripper)"
+    gripper_joint_damping="0.0"
+    gripper_joint_friction="0.0">
+    <origin xyz="0 0 0" rpy="0 0 ${pi}"/>
+  </xacro:ur5_workcell>
+
+  <xacro:workcell_table parent="$(arg tf_prefix)workcell_reference"/>
+
+
+  <gazebo reference="world"/>
+  <gazebo>
+    <plugin
+      filename="gz_ros2_control-system"
+      name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(arg simulation_controllers)</parameters>
+      <hold_joints>true</hold_joints>
+      <position_proportional_gain>0.5</position_proportional_gain>
+    </plugin>
+  </gazebo>
+
+  <xacro:ur_ros2_control
+    name="$(arg name)"
+    tf_prefix="$(arg tf_prefix)"
+    initial_positions="${dict(
+      shoulder_pan_joint=0.0,
+      shoulder_lift_joint=-pi/2,
+      elbow_joint=0.0,
+      wrist_1_joint=-pi/2,
+      wrist_2_joint=0.0,
+      wrist_3_joint=0.0)}"/>
+
+  <ros2_control name="robotiq_3f_sim" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+    <xacro:macro name="gripper_controlled_joint" params="name initial:=0.0">
+      <joint name="${name}">
+        <command_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${initial}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+    </xacro:macro>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_a_proximal_joint"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_a_middle_joint"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_a_distal_joint"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_b_scissor_joint" initial="-0.16406094968746698"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_b_proximal_joint"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_b_middle_joint"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_b_distal_joint"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_c_scissor_joint" initial="0.16406094968746698"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_c_proximal_joint"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_c_middle_joint"/>
+    <xacro:gripper_controlled_joint name="robotiq_3f_finger_c_distal_joint"/>
+  </ros2_control>
+</robot>

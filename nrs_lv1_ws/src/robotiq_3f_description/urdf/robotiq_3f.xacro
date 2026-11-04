@@ -1,0 +1,388 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!--
+    Current-revision AGS model. The assembled source pose is the reference
+    configuration: Basic mode, open fingers, and scissor feedback near 137.
+    The small inertial values are migrated placeholders and must not be
+    treated as validated dynamics parameters.
+  -->
+  <xacro:macro name="robotiq_3f_part" params="prefix link_name mesh_name">
+    <link name="${prefix}${link_name}">
+      <visual>
+        <geometry>
+          <mesh filename="package://robotiq_3f_description/meshes/visual/${mesh_name}.stl"/>
+        </geometry>
+        <material name="Robotiq-Black">
+          <color rgba="0.2 0.2 0.2 1.0"/>
+        </material>
+      </visual>
+      <collision>
+        <geometry>
+          <mesh filename="package://robotiq_3f_description/meshes/collision/${mesh_name}.stl"/>
+        </geometry>
+      </collision>
+      <inertial>
+        <mass value="0.01"/>
+        <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+      </inertial>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="robotiq_3f_fixed_joint" params="prefix joint_name parent child xyz rpy">
+    <joint name="${prefix}${joint_name}" type="fixed">
+      <parent link="${prefix}${parent}"/>
+      <child link="${prefix}${child}"/>
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+    </joint>
+  </xacro:macro>
+
+  <!--
+    Put the moving joint at the chosen pivot, then restore the source part
+    transform through a fixed mesh joint. mesh_xyz defaults to zero; a
+    nonzero value can compensate a fitted pivot shift so q=0 remains
+    algebraically identical to the old fixed joint. Keeping the motion frame
+    separate also makes every joint axis explicit in parent-part coordinates.
+  -->
+  <xacro:macro name="robotiq_3f_articulated_joint"
+               params="prefix joint_name parent child xyz rpy axis lower upper mesh_xyz:='0 0 0' damping:=1.0 friction:=0.1">
+    <link name="${prefix}${joint_name}_frame"/>
+    <joint name="${prefix}${joint_name}" type="revolute">
+      <parent link="${prefix}${parent}"/>
+      <child link="${prefix}${joint_name}_frame"/>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <axis xyz="${axis}"/>
+      <limit lower="${lower}" upper="${upper}" effort="100" velocity="1.25"/>
+      <dynamics damping="${damping}" friction="${friction}"/>
+    </joint>
+    <joint name="${prefix}${joint_name}_mesh_joint" type="fixed">
+      <parent link="${prefix}${joint_name}_frame"/>
+      <child link="${prefix}${child}"/>
+      <origin xyz="${mesh_xyz}" rpy="${rpy}"/>
+    </joint>
+  </xacro:macro>
+
+  <!--
+    Calibration-only variant with an adjustable rotation center. Three source
+    prismatic joints move the pivot in the parent coordinates. Three mimic
+    joints apply the opposite translation after the revolute joint, making the
+    mesh pose identical at q=0 for every pivot offset. At nonzero q the part
+    therefore rotates around the selected offset instead of translating with
+    it. Never use these virtual joints as physical degrees of freedom.
+  -->
+  <xacro:macro name="robotiq_3f_pivot_calibration_joint"
+               params="prefix joint_name parent child xyz rpy axis lower upper">
+    <link name="${prefix}${joint_name}_pivot_x_link"/>
+    <joint name="${prefix}${joint_name}_pivot_x_joint" type="prismatic">
+      <parent link="${prefix}${parent}"/>
+      <child link="${prefix}${joint_name}_pivot_x_link"/>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-0.04" upper="0.04" effort="10" velocity="0.1"/>
+    </joint>
+    <link name="${prefix}${joint_name}_pivot_y_link"/>
+    <joint name="${prefix}${joint_name}_pivot_y_joint" type="prismatic">
+      <parent link="${prefix}${joint_name}_pivot_x_link"/>
+      <child link="${prefix}${joint_name}_pivot_y_link"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-0.04" upper="0.04" effort="10" velocity="0.1"/>
+    </joint>
+    <link name="${prefix}${joint_name}_pivot_z_link"/>
+    <joint name="${prefix}${joint_name}_pivot_z_joint" type="prismatic">
+      <parent link="${prefix}${joint_name}_pivot_y_link"/>
+      <child link="${prefix}${joint_name}_pivot_z_link"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-0.04" upper="0.04" effort="10" velocity="0.1"/>
+    </joint>
+
+    <link name="${prefix}${joint_name}_frame"/>
+    <joint name="${prefix}${joint_name}" type="revolute">
+      <parent link="${prefix}${joint_name}_pivot_z_link"/>
+      <child link="${prefix}${joint_name}_frame"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <axis xyz="${axis}"/>
+      <limit lower="${lower}" upper="${upper}" effort="100" velocity="1.25"/>
+      <dynamics damping="1.0" friction="0.1"/>
+    </joint>
+
+    <link name="${prefix}${joint_name}_compensate_x_link"/>
+    <joint name="${prefix}${joint_name}_compensate_x_joint" type="prismatic">
+      <parent link="${prefix}${joint_name}_frame"/>
+      <child link="${prefix}${joint_name}_compensate_x_link"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="-0.04" upper="0.04" effort="10" velocity="0.1"/>
+      <mimic joint="${prefix}${joint_name}_pivot_x_joint" multiplier="-1"/>
+    </joint>
+    <link name="${prefix}${joint_name}_compensate_y_link"/>
+    <joint name="${prefix}${joint_name}_compensate_y_joint" type="prismatic">
+      <parent link="${prefix}${joint_name}_compensate_x_link"/>
+      <child link="${prefix}${joint_name}_compensate_y_link"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <limit lower="-0.04" upper="0.04" effort="10" velocity="0.1"/>
+      <mimic joint="${prefix}${joint_name}_pivot_y_joint" multiplier="-1"/>
+    </joint>
+    <link name="${prefix}${joint_name}_compensate_z_link"/>
+    <joint name="${prefix}${joint_name}_compensate_z_joint" type="prismatic">
+      <parent link="${prefix}${joint_name}_compensate_y_link"/>
+      <child link="${prefix}${joint_name}_compensate_z_link"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-0.04" upper="0.04" effort="10" velocity="0.1"/>
+      <mimic joint="${prefix}${joint_name}_pivot_z_joint" multiplier="-1"/>
+    </joint>
+    <joint name="${prefix}${joint_name}_mesh_joint" type="fixed">
+      <parent link="${prefix}${joint_name}_compensate_z_link"/>
+      <child link="${prefix}${child}"/>
+      <origin xyz="0 0 0" rpy="${rpy}"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="robotiq_3f_gripper"
+               params="parent prefix:='' include_cable_plugs:=true articulated:=true calibrate_middle_pivots:=false joint_damping:=1.0 joint_friction:=0.1 *origin">
+    <link name="${prefix}robotiq_3f_frame"/>
+
+    <joint name="${prefix}robotiq_3f_mount_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}robotiq_3f_frame"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_wrist" mesh_name="AGS_wrist"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_palm" mesh_name="AGS_palm"/>
+
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-base" mesh_name="AGS_finger-base"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-prox" mesh_name="AGS_finger-prox"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-med" mesh_name="AGS_finger-med"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-dist" mesh_name="AGS_finger-dist"/>
+
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-base001" mesh_name="AGS_finger-base"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-prox001" mesh_name="AGS_finger-prox"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-med001" mesh_name="AGS_finger-med"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-dist001" mesh_name="AGS_finger-dist"/>
+
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-base002" mesh_name="AGS_finger-base"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-prox002" mesh_name="AGS_finger-prox"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-med002" mesh_name="AGS_finger-med"/>
+    <xacro:robotiq_3f_part prefix="${prefix}" link_name="AGS_finger-dist002" mesh_name="AGS_finger-dist"/>
+
+    <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+      joint_name="robotiq_3f_frame_to_AGS_wrist_joint"
+      parent="robotiq_3f_frame" child="AGS_wrist"
+      xyz="0 0 0" rpy="0 1.0432366 3.1415927"/>
+    <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+      joint_name="AGS_wrist_to_AGS_palm_joint"
+      parent="AGS_wrist" child="AGS_palm"
+      xyz="0 -0.04127 0" rpy="0 1.0432366 3.1415927"/>
+
+    <xacro:if value="${articulated}">
+      <!--
+        AGS suffix mapping follows the Robotiq convention: the opposite,
+        fixed-base finger is A; the two outer/scissoring fingers are B and C.
+        Axes are expressed in each parent part's reference coordinates.
+      -->
+      <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+        joint_name="robotiq_3f_finger_b_scissor_joint"
+        parent="AGS_palm" child="AGS_finger-base"
+        xyz="-0.04056 0.01985 0.03651" rpy="0 0 0"
+        axis="1 0 0" lower="-0.2967" upper="0.2967"/>
+      <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+        joint_name="robotiq_3f_finger_b_proximal_joint"
+        parent="AGS_finger-base" child="AGS_finger-prox"
+        xyz="-0.00397 0.02151 0" rpy="-3.1415927 0 -1.1150822"
+        axis="0 0 -1" lower="0" upper="1.2218"/>
+      <xacro:if value="${calibrate_middle_pivots}">
+        <!--
+          Keep the original assembly origin in the fitting model so existing
+          CSV samples remain replayable. The accepted +11.62 mm X correction
+          is promoted only in the normal articulated branch below.
+        -->
+        <xacro:robotiq_3f_pivot_calibration_joint prefix="${prefix}"
+          joint_name="robotiq_3f_finger_b_middle_joint"
+          parent="AGS_finger-prox" child="AGS_finger-med"
+          xyz="-0.069809366 -0.0013289835 0.00804" rpy="0 0 0"
+          axis="0 0 1" lower="0" upper="1.5708"/>
+      </xacro:if>
+      <xacro:unless value="${calibrate_middle_pivots}">
+        <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+          joint_name="robotiq_3f_finger_b_middle_joint"
+          parent="AGS_finger-prox" child="AGS_finger-med"
+          xyz="-0.058189366 -0.0013289835 0.00804" rpy="0 0 0"
+          mesh_xyz="-0.01162 0 0"
+          axis="0 0 1" lower="0" upper="1.5708"/>
+      </xacro:unless>
+      <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+        joint_name="robotiq_3f_finger_b_distal_joint"
+        parent="AGS_finger-med" child="AGS_finger-dist"
+        xyz="-0.024675479 0.0014480048 -0.00804" rpy="0.4557141 -1.5707963 0"
+        axis="0 0 1" lower="-1.2218" upper="0"/>
+
+      <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+        joint_name="robotiq_3f_finger_c_scissor_joint"
+        parent="AGS_palm" child="AGS_finger-base001"
+        xyz="-0.04056 0.01985 -0.03651" rpy="0 0 0"
+        axis="1 0 0" lower="-0.2967" upper="0.2967"/>
+      <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+        joint_name="robotiq_3f_finger_c_proximal_joint"
+        parent="AGS_finger-base001" child="AGS_finger-prox001"
+        xyz="-0.00397 0.02151 0" rpy="-3.1415927 0 -1.1150822"
+        axis="0 0 -1" lower="0" upper="1.2218"/>
+      <xacro:if value="${calibrate_middle_pivots}">
+        <xacro:robotiq_3f_pivot_calibration_joint prefix="${prefix}"
+          joint_name="robotiq_3f_finger_c_middle_joint"
+          parent="AGS_finger-prox001" child="AGS_finger-med001"
+          xyz="-0.070573474 -0.0012468926 0.00805" rpy="0 0 0"
+          axis="0 0 1" lower="0" upper="1.5708"/>
+      </xacro:if>
+      <xacro:unless value="${calibrate_middle_pivots}">
+        <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+          joint_name="robotiq_3f_finger_c_middle_joint"
+          parent="AGS_finger-prox001" child="AGS_finger-med001"
+          xyz="-0.058953474 -0.0012468926 0.00805" rpy="0 0 0"
+          mesh_xyz="-0.01162 0 0"
+          axis="0 0 1" lower="0" upper="1.5708"/>
+      </xacro:unless>
+      <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+        joint_name="robotiq_3f_finger_c_distal_joint"
+        parent="AGS_finger-med001" child="AGS_finger-dist001"
+        xyz="-0.024679703 0.0014793442 -0.00805" rpy="0.4557141 -1.5707963 0"
+        axis="0 0 1" lower="-1.2218" upper="0"/>
+
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_palm_to_AGS_finger-base002_joint"
+        parent="AGS_palm" child="AGS_finger-base002"
+        xyz="0.04051 0.01985 0" rpy="3.1415927 0 3.1415927"/>
+      <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+        joint_name="robotiq_3f_finger_a_proximal_joint"
+        parent="AGS_finger-base002" child="AGS_finger-prox002"
+        xyz="-0.00397 0.02151 0" rpy="3.1415927 0 -1.1136946"
+        axis="0 0 -1" lower="0" upper="1.2218"/>
+      <xacro:if value="${calibrate_middle_pivots}">
+        <xacro:robotiq_3f_pivot_calibration_joint prefix="${prefix}"
+          joint_name="robotiq_3f_finger_a_middle_joint"
+          parent="AGS_finger-prox002" child="AGS_finger-med002"
+          xyz="-0.069807455 -0.001425852 0.00805" rpy="0 0 -0.066497045"
+          axis="0 0 1" lower="0" upper="1.5708"/>
+      </xacro:if>
+      <xacro:unless value="${calibrate_middle_pivots}">
+        <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+          joint_name="robotiq_3f_finger_a_middle_joint"
+          parent="AGS_finger-prox002" child="AGS_finger-med002"
+          xyz="-0.058187455 -0.001425852 0.00805" rpy="0 0 -0.066497045"
+          mesh_xyz="-0.01162 0 0"
+          axis="0 0 1" lower="0" upper="1.5708"/>
+      </xacro:unless>
+      <xacro:robotiq_3f_articulated_joint prefix="${prefix}"
+        damping="${joint_damping}" friction="${joint_friction}"
+        joint_name="robotiq_3f_finger_a_distal_joint"
+        parent="AGS_finger-med002" child="AGS_finger-dist002"
+        xyz="-0.024716867 -0.00022913109 -0.00805" rpy="0.52359878 -1.5707963 0"
+        axis="0 0 1" lower="-1.2218" upper="0"/>
+    </xacro:if>
+
+    <xacro:unless value="${articulated}">
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_palm_to_AGS_finger-base_joint"
+        parent="AGS_palm" child="AGS_finger-base"
+        xyz="-0.04056 0.01985 0.03651" rpy="0 0 0"/>
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_finger-base_to_AGS_finger-prox_joint"
+        parent="AGS_finger-base" child="AGS_finger-prox"
+        xyz="-0.00397 0.02151 0" rpy="-3.1415927 0 -1.1150822"/>
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_finger-prox_to_AGS_finger-med_joint"
+        parent="AGS_finger-prox" child="AGS_finger-med"
+        xyz="-0.069809366 -0.0013289835 0.00804" rpy="0 0 0"/>
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_finger-med_to_AGS_finger-dist_joint"
+        parent="AGS_finger-med" child="AGS_finger-dist"
+        xyz="-0.024675479 0.0014480048 -0.00804" rpy="0.4557141 -1.5707963 0"/>
+
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_palm_to_AGS_finger-base001_joint"
+        parent="AGS_palm" child="AGS_finger-base001"
+        xyz="-0.04056 0.01985 -0.03651" rpy="0 0 0"/>
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_finger-base001_to_AGS_finger-prox001_joint"
+        parent="AGS_finger-base001" child="AGS_finger-prox001"
+        xyz="-0.00397 0.02151 0" rpy="-3.1415927 0 -1.1150822"/>
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_finger-prox001_to_AGS_finger-med001_joint"
+        parent="AGS_finger-prox001" child="AGS_finger-med001"
+        xyz="-0.070573474 -0.0012468926 0.00805" rpy="0 0 0"/>
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_finger-med001_to_AGS_finger-dist001_joint"
+        parent="AGS_finger-med001" child="AGS_finger-dist001"
+        xyz="-0.024679703 0.0014793442 -0.00805" rpy="0.4557141 -1.5707963 0"/>
+
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_palm_to_AGS_finger-base002_joint"
+        parent="AGS_palm" child="AGS_finger-base002"
+        xyz="0.04051 0.01985 0" rpy="3.1415927 0 3.1415927"/>
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_finger-base002_to_AGS_finger-prox002_joint"
+        parent="AGS_finger-base002" child="AGS_finger-prox002"
+        xyz="-0.00397 0.02151 0" rpy="3.1415927 0 -1.1136946"/>
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_finger-prox002_to_AGS_finger-med002_joint"
+        parent="AGS_finger-prox002" child="AGS_finger-med002"
+        xyz="-0.069807455 -0.001425852 0.00805" rpy="0 0 -0.066497045"/>
+      <xacro:robotiq_3f_fixed_joint prefix="${prefix}"
+        joint_name="AGS_finger-med002_to_AGS_finger-dist002_joint"
+        parent="AGS_finger-med002" child="AGS_finger-dist002"
+        xyz="-0.024716867 -0.00022913109 -0.00805" rpy="0.52359878 -1.5707963 0"/>
+    </xacro:unless>
+
+    <xacro:if value="${include_cable_plugs}">
+      <link name="${prefix}gripper_power_plug">
+        <visual>
+          <geometry><cylinder radius="0.008" length="0.048"/></geometry>
+          <material name="Robotiq-Grey"><color rgba="0.4 0.4 0.4 1.0"/></material>
+        </visual>
+        <collision>
+          <geometry><cylinder radius="0.008" length="0.048"/></geometry>
+        </collision>
+        <inertial>
+          <mass value="0.1"/>
+          <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+        </inertial>
+      </link>
+      <link name="${prefix}gripper_ethernet_plug">
+        <visual>
+          <geometry><cylinder radius="0.008" length="0.048"/></geometry>
+          <material name="Robotiq-Grey"><color rgba="0.4 0.4 0.4 1.0"/></material>
+        </visual>
+        <collision>
+          <geometry><cylinder radius="0.008" length="0.048"/></geometry>
+        </collision>
+        <inertial>
+          <mass value="0.1"/>
+          <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+        </inertial>
+      </link>
+      <joint name="${prefix}gripper_power_plug_joint" type="fixed">
+        <parent link="${prefix}AGS_palm"/>
+        <child link="${prefix}gripper_power_plug"/>
+        <origin xyz="0.09 -0.035 0.025" rpy="1.5707963267948966 0 0"/>
+      </joint>
+      <joint name="${prefix}gripper_ethernet_plug_joint" type="fixed">
+        <parent link="${prefix}AGS_palm"/>
+        <child link="${prefix}gripper_ethernet_plug"/>
+        <origin xyz="0.09 -0.035 -0.025" rpy="1.5707963267948966 0 0"/>
+      </joint>
+    </xacro:if>
+  </xacro:macro>
+</robot>

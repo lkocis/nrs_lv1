@@ -1,0 +1,13 @@
+/robotiq_3f/controller:
+  ros__parameters:
+    activation_timeout_s: 30.0
+    default_move_timeout_s: 15.0
+    status_timeout_s: 0.5
+    activation_mode: 0
+    gripper_command_closed_position_m: 0.0
+    gripper_command_max_opening_m: 0.155
+    gripper_command_closed_raw: 112
+    gripper_command_min_effort_n: 15.0
+    gripper_command_max_effort_n: 60.0
+    gripper_command_default_effort_n: 30.0
+    gripper_command_speed: 20

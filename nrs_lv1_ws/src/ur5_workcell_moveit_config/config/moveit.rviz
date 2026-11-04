@@ -1,0 +1,76 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /MotionPlanning1
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Name: Grid
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+    - Class: moveit_rviz_plugin/MotionPlanning
+      Enabled: true
+      Move Group Namespace: ""
+      Name: MotionPlanning
+      Planning Request:
+        Planning Group: ur_manipulator
+        Query Goal State: true
+        Query Start State: false
+      Planning Scene Topic: monitored_planning_scene
+      Robot Description: robot_description
+      Planned Path:
+        Color Enabled: true
+        Interrupt Display: false
+        Loop Animation: true
+        Trajectory Topic: /display_planned_path
+        Robot Alpha: 0.5
+        Show Robot Collision: false
+        Show Robot Visual: true
+        Show Trail: false
+        State Display Time: 0.05 s
+        Trail Step Size: 1
+      Scene Robot:
+        Robot Alpha: 1
+        Show Robot Collision: false
+        Show Robot Visual: true
+      Velocity_Scaling_Factor: 0.1
+      Acceleration_Scaling_Factor: 0.1
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 1.8
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0.4
+      Name: Current View
+      Pitch: 0.45
+      Target Frame: base_link
+      Yaw: 0.8
+Window Geometry:
+  Height: 900
+  Hide Left Dock: false
+  Hide Right Dock: false
+  QMainWindow State: 000000ff00000000fd00000002000000000000015400000384fc0200000002fb000000100044006900730070006c0061007900730100000000000001bf0000001700fffffffb0000001c004d006f00740069006f006e0050006c0061006e006e0069006e006701000001c5000001bf0000001700ffffff000000010000010400000384fc0200000001fb0000000a005600690065007700730100000000000003840000001700ffffff000003140000038400000004000000040000000800000008fc00000000
+  Width: 1400

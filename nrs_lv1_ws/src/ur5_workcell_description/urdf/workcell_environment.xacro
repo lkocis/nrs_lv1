@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="workcell_table" params="
+    parent
+    width:=0.9
+    length:=1.5
+    height:=0.9
+    robot_edge_offset:=0.21">
+
+    <!--
+      The robot is centered across the width. Its -Y axis points toward the
+      long side of the table, and its mounting origin lies on the top surface.
+    -->
+    <link name="table">
+      <visual>
+        <origin
+          xyz="0 ${robot_edge_offset - length / 2.0} ${-height / 2.0}"
+          rpy="0 0 0"/>
+        <geometry>
+          <box size="${width} ${length} ${height}"/>
+        </geometry>
+        <material name="workcell_table_gray">
+          <color rgba="0.36 0.39 0.42 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin
+          xyz="0 ${robot_edge_offset - length / 2.0} ${-height / 2.0}"
+          rpy="0 0 0"/>
+        <geometry>
+          <box size="${width} ${length} ${height}"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="table_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="table"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+</robot>

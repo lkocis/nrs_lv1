@@ -1,0 +1,11 @@
+/robotiq_3f/driver:
+  ros__parameters:
+    gripper_ip: ""
+    port: 502
+    unit_id: 0
+    poll_rate_hz: 10.0
+    connect_timeout_ms: 1000
+    response_timeout_ms: 500
+    reconnect_initial_ms: 500
+    reconnect_max_ms: 5000
+    allow_automatic_release: false

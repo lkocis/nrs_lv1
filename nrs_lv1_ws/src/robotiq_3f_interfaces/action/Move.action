@@ -1,0 +1,31 @@
+# Full 3F motion goal. Values use the native Robotiq 0..255 register scale.
+uint8 mode
+bool individual_finger_control
+bool individual_scissor_control
+
+uint8 position_a
+uint8 speed_a
+uint8 force_a
+
+uint8 position_b
+uint8 speed_b
+uint8 force_b
+
+uint8 position_c
+uint8 speed_c
+uint8 force_c
+
+uint8 position_scissor
+uint8 speed_scissor
+uint8 force_scissor
+
+# Zero selects the controller's configured default timeout.
+builtin_interfaces/Duration timeout
+---
+bool reached_requested_position
+bool stopped_due_to_contact
+uint8 fault_status
+string message
+Robotiq3FStatus final_status
+---
+Robotiq3FStatus status

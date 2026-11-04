@@ -1,0 +1,11 @@
+moveit_setup_assistant_config:
+  urdf:
+    package: ur5_workcell_description
+    relative_path: urdf/workcell.urdf.xacro
+    xacro_args: safety_limits:=true
+  srdf:
+    relative_path: config/ur5_workcell.srdf
+  package_settings:
+    author_name: UR5 ROS 2 maintainers
+    author_email: simundicv@gmail.com
+    generated_timestamp: 1788966000

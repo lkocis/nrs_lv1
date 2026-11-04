@@ -1,0 +1,20 @@
+cabinet_spawner:
+  ros__parameters:
+    door_width: 0.31
+    door_height: 0.31
+    panel_thickness: 0.017
+    cabinet_depth: 0.30
+    axis_pos: -1
+    initial_angle_deg: 20.0
+    nominal_x: 0.0
+    nominal_y: -0.75
+    nominal_yaw: 1.5707963267948966
+    position_jitter: 0.05
+    yaw_jitter: 0.5
+    seed: -1  # Set a nonnegative value to repeat a placement.
+    table_width: 0.9
+    table_length: 1.5
+    table_edge_offset: 0.21
+    table_top_z: 0.0
+    table_margin: 0.04
+    world_name: workcell

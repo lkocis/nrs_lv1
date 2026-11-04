@@ -1,0 +1,17 @@
+# colcon: generirano, uvijek se može ponovno izgraditi
+build/
+install/
+log/
+
+# Windows ostaci (WSL)
+*:Zone.Identifier
+*Zone.Identifier
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# editori
+.vscode/
+*.swp
