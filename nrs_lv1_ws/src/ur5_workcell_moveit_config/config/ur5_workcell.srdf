@@ -175,4 +175,26 @@
     <disable_collisions link1="AGS_finger-med001" link2="AGS_finger-dist002" reason="Allowed"/>
     <disable_collisions link1="AGS_finger-dist001" link2="AGS_finger-med002" reason="Allowed"/>
     <disable_collisions link1="AGS_finger-dist001" link2="AGS_finger-dist002" reason="Allowed"/>
+    <!-- FT300S dodan izmedju tool0 i saka -->
+    <disable_collisions link1="ft300_mounting_plate" link2="ft300_sensor" reason="Adjacent"/>
+    <disable_collisions link1="wrist_3_link" link2="ft300_mounting_plate" reason="Adjacent"/>
+    <disable_collisions link1="wrist_3_link" link2="ft300_sensor" reason="Never"/>
+    <disable_collisions link1="wrist_2_link" link2="ft300_mounting_plate" reason="Never"/>
+    <disable_collisions link1="wrist_2_link" link2="ft300_sensor" reason="Never"/>
+    <disable_collisions link1="wrist_1_link" link2="ft300_mounting_plate" reason="Never"/>
+    <disable_collisions link1="wrist_1_link" link2="ft300_sensor" reason="Never"/>
+    <disable_collisions link1="AGS_wrist" link2="ft300_sensor" reason="Adjacent"/>
+    <disable_collisions link1="AGS_wrist" link2="ft300_mounting_plate" reason="Never"/>
+    <disable_collisions link1="AGS_palm" link2="ft300_sensor" reason="Never"/>
+    <disable_collisions link1="AGS_palm" link2="ft300_mounting_plate" reason="Never"/>
+    <disable_collisions link1="gripper_power_plug" link2="ft300_sensor" reason="Never"/>
+    <disable_collisions link1="gripper_ethernet_plug" link2="ft300_sensor" reason="Never"/>
+    <disable_collisions link1="AGS_finger-base" link2="ft300_sensor" reason="Never"/>
+    <disable_collisions link1="AGS_finger-base001" link2="ft300_sensor" reason="Never"/>
+    <disable_collisions link1="AGS_finger-base002" link2="ft300_sensor" reason="Never"/>
+    <disable_collisions link1="gripper_power_plug" link2="ft300_mounting_plate" reason="Never"/>
+    <disable_collisions link1="gripper_ethernet_plug" link2="ft300_mounting_plate" reason="Never"/>
+    <disable_collisions link1="AGS_finger-base" link2="ft300_mounting_plate" reason="Never"/>
+    <disable_collisions link1="AGS_finger-base001" link2="ft300_mounting_plate" reason="Never"/>
+    <disable_collisions link1="AGS_finger-base002" link2="ft300_mounting_plate" reason="Never"/>
 </robot>
