@@ -1,37 +1,88 @@
 <?xml version="1.0"?>
+<!--
+  UR5 tooling: tool0 -> Robotiq FT300S -> spojni element -> Robotiq 3-Finger + TCP vrha prsta.
+
+  Lanac (z-os tool0 prema van):
+    tool0
+      ft300_mounting_plate        (spojnica FT300S na prirubnicu UR5, z = 0)
+      ft300_sensor                (senzor, izlazna ploha na z = 0.0415 m)
+      ft_tool_flange              (okvir izlazne plohe senzora, orijentiran kao tool0)
+      ft_gripper_adapter          (spojni element debljine ft_adapter_thickness)
+      robotiq_3f_frame            (okvir sake; stražnja ploha AGS_wrist = 12.7 mm iza njega)
+        finger_tip                (TCP: sredina jastučića distalnog članka prsta A)
+
+  Napomena: debljina spojnog elementa (ft_adapter_thickness) je pretpostavka -
+  prije rada na stvarnom robotu izmjeriti stvarni adapter i ispraviti vrijednost.
+-->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
   <xacro:include filename="$(find robotiq_3f_description)/urdf/robotiq_3f.xacro"/>
   <xacro:include filename="$(find robotiq_ft300s_description)/urdf/robotiq_ft300s.xacro"/>
 
   <xacro:macro name="ur5_workcell_tooling"
-               params="tool0 prefix:='' include_cable_plugs:=true articulated_gripper:=true gripper_joint_damping:=1.0 gripper_joint_friction:=0.1">
+               params="tool0 prefix:='' include_cable_plugs:=true articulated_gripper:=true gripper_joint_damping:=1.0 gripper_joint_friction:=0.1 ft_adapter_thickness:=0.010">
 
-    <!-- 1) senzor na tool0 -->
+    <!-- Izlazna ploha FT300S u odnosu na ft300_mounting_plate (iz robotiq_ft300s.xacro: 0.0415 m). -->
+    <xacro:property name="ft_output_z" value="0.0415"/>
+    <!-- Stražnja ploha AGS_wrist je 12.7 mm iza okvira sake (mreža wrist: y in [-0.0127, 0]). -->
+    <xacro:property name="gripper_wrist_thickness" value="0.0127"/>
+    <xacro:property name="adapter_radius" value="0.0375"/>
+
+    <!-- 1) Senzor sile i momenta izravno na tool0 -->
     <xacro:robotiq_ft300s parent="${tool0}" prefix="${prefix}">
       <origin xyz="0 0 0" rpy="0 0 0"/>
     </xacro:robotiq_ft300s>
 
-    <!-- 2) okvir na kraju senzora, na njega ide šaka -->
-    <link name="${prefix}gripper_mount_link"/>
-    <joint name="${prefix}ft300_to_gripper_mount_joint" type="fixed">
-      <parent link="${prefix}ft_measurement_frame"/>
-      <child link="${prefix}gripper_mount_link"/>
-      <origin xyz="0 0 0" rpy="0 0 -1.5707963267948966"/>
+    <!-- 2) Okvir izlazne plohe senzora (ista orijentacija kao tool0, pa ostaje rpy iz originalne montaže sake) -->
+    <link name="${prefix}ft_tool_flange"/>
+    <joint name="${prefix}ft_tool_flange_joint" type="fixed">
+      <parent link="${prefix}ft300_mounting_plate"/>
+      <child link="${prefix}ft_tool_flange"/>
+      <origin xyz="0 0 ${ft_output_z}" rpy="0 0 0"/>
     </joint>
 
-    <!-- 3) šaka, isto kao u originalu, samo je parent novi okvir -->
-    <xacro:robotiq_3f_gripper parent="${prefix}gripper_mount_link" prefix="${prefix}"
+    <!-- 3) Spojni element senzor -> šaka (valjak; ishodište na donjoj plohi) -->
+    <link name="${prefix}ft_gripper_adapter">
+      <visual>
+        <origin xyz="0 0 ${ft_adapter_thickness/2}" rpy="0 0 0"/>
+        <geometry><cylinder radius="${adapter_radius}" length="${ft_adapter_thickness}"/></geometry>
+        <material name="adapter_alu"><color rgba="0.7 0.7 0.72 1.0"/></material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${ft_adapter_thickness/2}" rpy="0 0 0"/>
+        <geometry><cylinder radius="${adapter_radius}" length="${ft_adapter_thickness}"/></geometry>
+      </collision>
+      <inertial>
+        <origin xyz="0 0 ${ft_adapter_thickness/2}" rpy="0 0 0"/>
+        <mass value="0.05"/>
+        <inertia ixx="1.0e-5" ixy="0" ixz="0" iyy="1.0e-5" iyz="0" izz="1.4e-5"/>
+      </inertial>
+    </link>
+    <joint name="${prefix}ft_gripper_adapter_joint" type="fixed">
+      <parent link="${prefix}ft_tool_flange"/>
+      <child link="${prefix}ft_gripper_adapter"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </joint>
+
+    <!-- 4) Šaka: ista relativna orijentacija kao prije (rpy), pomak = adapter + debljina AGS_wrist -->
+    <xacro:robotiq_3f_gripper parent="${prefix}ft_gripper_adapter" prefix="${prefix}"
       include_cable_plugs="${include_cable_plugs}" articulated="${articulated_gripper}"
       joint_damping="${gripper_joint_damping}" joint_friction="${gripper_joint_friction}">
-      <origin xyz="0 0 0.0127" rpy="1.5707963267948966 0 -0.7853981633974483"/>
+      <origin xyz="0 0 ${ft_adapter_thickness + gripper_wrist_thickness}"
+              rpy="1.5707963267948966 0 -0.7853981633974483"/>
     </xacro:robotiq_3f_gripper>
 
-    <!-- 4) okvir vrška prsta -->
-    <link name="${prefix}finger_contact_tip"/>
-    <joint name="${prefix}finger_contact_tip_joint" type="fixed">
-      <parent link="${prefix}AGS_finger-dist002"/>
-      <child link="${prefix}finger_contact_tip"/>
-      <origin xyz="0 0.005 0.038" rpy="0 0 0"/>
+    <!--
+      5) TCP za dodir s vratima: jastučić distalnog članka prsta A (fiksni prst nasuprot B/C),
+      u otvorenom stanju. Koordinate u okviru robotiq_3f_frame (izračunato FK-om iz xacro-a + STL mreža):
+        - prst se proteže u +y okvira sake (vrh na y = 0.2055 m), jastučić je na x = 0.0786 m,
+        - z_TCP = vanjska normala jastučića (-x sake), x_TCP = smjer prsta (+y sake), y_TCP = -z sake.
+      Rotacija R = [x y z] = [[0,0,-1],[1,0,0],[0,-1,0]]  ->  rpy = (-pi/2, 0, pi/2).
+    -->
+    <link name="${prefix}finger_tip"/>
+    <joint name="${prefix}finger_tip_joint" type="fixed">
+      <parent link="${prefix}robotiq_3f_frame"/>
+      <child link="${prefix}finger_tip"/>
+      <origin xyz="0.0786 0.19 0.0" rpy="-1.5707963267948966 0 1.5707963267948966"/>
     </joint>
   </xacro:macro>
 </robot>

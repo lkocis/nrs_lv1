@@ -1,164 +1,129 @@
-import json
+#!/usr/bin/env python3
+"""Zadatak 2: geometrija ormarića.
+
+Prima JSON s teme /cabinet/config, računa
+  * položaj i smjer osi rotacije vrata (z-os okvira A) u svijetu,
+  * početni položaj sustava S_D u svijetu (jednadžba (2)),
+i uspoređuje rezultat s matricom T_D_world_initial iz poruke i s TF okvirom
+cabinet_D_initial (te cabinet_origin).
+
+Pokretanje (simulacija mora raditi):
+    ros2 run nrs_lv1_tasks task2_cabinet --ros-args -p use_sim_time:=true
+"""
+
+import sys
+import time
 
 import numpy as np
 import rclpy
+from rclpy.duration import Duration
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
-np.set_printoptions(precision=4, suppress=True)
+from nrs_lv1_tasks import cabinet_utils as cu
 
 
-# ---------- pomoćne funkcije: svaka je jedna matrica iz formule ----------
-
-def rot_z(angle):
-    """4x4 homogena matrica: rotacija oko z za kut u radijanima."""
-    c, s = np.cos(angle), np.sin(angle)
-    T = np.eye(4)
-    T[:2, :2] = [[c, -s], [s, c]]
-    return T
+def tf_to_matrix(msg):
+    t, q = msg.transform.translation, msg.transform.rotation
+    return cu.make_T(cu.R_from_quat([q.x, q.y, q.z, q.w]), [t.x, t.y, t.z])
 
 
-def translation(x, y, z):
-    T = np.eye(4)
-    T[:3, 3] = [x, y, z]
-    return T
+def compare(name, T_calc, T_ref):
+    dp = np.linalg.norm(T_calc[:3, 3] - T_ref[:3, 3])
+    dr = np.rad2deg(cu.rot_angle_between(T_calc[:3, :3], T_ref[:3, :3]))
+    print(f'  {name:<34s} |dp| = {dp * 1000:9.4f} mm   |dR| = {dr:9.5f} deg   '
+          f'{"OK" if dp < 1e-4 and dr < 1e-2 else "RAZLIKA!"}')
+    return dp, dr
 
 
-def quat_to_matrix(x, y, z, w):
-    """Kvaternion (x, y, z, w) -> 4x4 matrica (samo rotacija)."""
-    n = np.sqrt(x * x + y * y + z * z + w * w)
-    x, y, z, w = x / n, y / n, z / n, w / n
-    T = np.eye(4)
-    T[:3, :3] = [
-        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-    ]
-    return T
-
-
-def T_W_O(cfg):
-    """Ormarić u svijetu, iz poze [x, y, z, yaw]."""
-    x, y, z, yaw = cfg["pose"]
-    return translation(x, y, z) @ rot_z(yaw)
-
-
-def T_O_A(cfg):
-    """Sustav osi zgloba A u sustavu ormarića O (isto kao T_A_O_init u cabinet_model.py)."""
-    mu = cfg["axis_pos"]
-    static_d = cfg["cabinet_depth"]
-    d_door = cfg["panel_thickness"]
-    w_door = cfg["door_width"]
-    T = rot_z(np.pi) if mu < 0 else np.eye(4)   # ako je os zgloba na strani axis_pos = -1, sustav A je zakrenut za 180° oko z. Inače je bez rotacije.
-    T[:3, 3] = [static_d / 2.0 - d_door / 2.0, mu * w_door / 2.0, 0.0]
-    # u smjeru x pola dubine ormarića minus pola debljine vrata, u smjeru y pola širine vrata sa stranom (µ), a z je 0
-    return T
-
-
-def T_A_D_closed(cfg):
-    """Matrica (1) iz upute: S_D u odnosu na S_A kad su vrata zatvorena (phi = 0)."""
-    mu = cfg["axis_pos"]
-    lx = cfg["panel_thickness"]   # debljina
-    ly = cfg["door_width"]        # širina
-    lz = cfg["door_height"]       # visina
-    rx, ry = 0.0, -ly / 2.0       # os zgloba je na rubu krila (vidi cabinet_model.py)
-    return np.array([
-        [0.0, 0.0, -mu, rx - mu * lx / 2.0],
-        [mu, 0.0, 0.0, ry - ly / 2.0],
-        [0.0, -1.0, 0.0, lz / 2.0],
-        [0.0, 0.0, 0.0, 1.0],
-    ])
-
-
-def T_W_D(cfg, phi):
-    """Poza S_D u svijetu pri kutu otvorenosti phi (rad). Za µ = -1 vrata se okreću za -phi."""
-    mu = cfg["axis_pos"]
-    return T_W_O(cfg) @ T_O_A(cfg) @ rot_z(mu * phi) @ T_A_D_closed(cfg)
-
-
-def compare(name, mine, ref, atol=1e-5):
-    ref = np.array(ref, dtype=float)
-    diff = np.abs(mine - ref).max()
-    print(f"{name:<32} poklapanje: {np.allclose(mine, ref, atol=atol)}   max|razlika| = {diff:.2e}")
-
-
-# ---------- ROS čvor ----------
-
-class Task2Cabinet(Node):
+class Task2(Node):
     def __init__(self):
-        super().__init__("task2_cabinet")
+        super().__init__('task2_cabinet')
         self.cfg = None
-        self.W_T_D_mine = None
-        self.done = False
-
-        # /cabinet/config je objavljen jednom, zato transient_local (isto kao u echo naredbi)
-        qos = QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
-        self.create_subscription(String, "/cabinet/config", self.on_config, qos)
-
+        self.create_subscription(
+            String, '/cabinet/config', self.on_config,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
-        self.create_timer(0.5, self.check_tf)
 
     def on_config(self, msg):
-        if self.cfg is not None:
-            return
-        self.cfg = json.loads(msg.data)
-        cfg = self.cfg
-        phi = np.radians(cfg["initial_angle_deg"])
+        if self.cfg is None:
+            self.cfg = cu.parse_config(msg.data)
 
-        W_T_A = T_W_O(cfg) @ T_O_A(cfg)
-        self.W_T_D_mine = T_W_D(cfg, phi)
-
-        print("\n=== Os rotacije vrata u svijetu ===")
-        print("točka na osi (ishodište S_A):", W_T_A[:3, 3])
-        print("smjer osi (z-os S_A):        ", W_T_A[:3, 2])
-
-        print("\n=== Moja W_T_D(phi0) ===")
-        print(self.W_T_D_mine)
-
-        print("\n=== Usporedba s porukom /cabinet/config ===")
-        compare("O_T_A      vs T_A_cabinet_closed", T_O_A(cfg), cfg["T_A_cabinet_closed"])
-        compare("A_T_D(0)   vs T_D_hinge_closed", T_A_D_closed(cfg), cfg["T_D_hinge_closed"])
-        compare("W_T_D      vs T_D_world_initial", self.W_T_D_mine, cfg["T_D_world_initial"])
-
-    def check_tf(self):
-        if self.W_T_D_mine is None or self.done:
-            return
+    def lookup(self, child):
         try:
-            tf = self.tf_buffer.lookup_transform("world", "cabinet_D_initial", rclpy.time.Time())
-        except Exception as e:  # TF još nije stigao
-            self.get_logger().warn(f"čekam TF world -> cabinet_D_initial: {e}", throttle_duration_sec=5.0)
-            return
-
-        t = tf.transform.translation
-        q = tf.transform.rotation
-        W_T_D_tf = quat_to_matrix(q.x, q.y, q.z, q.w)
-        W_T_D_tf[:3, 3] = [t.x, t.y, t.z]
-
-        print("\n=== Usporedba s TF-om (world -> cabinet_D_initial) ===")
-        print(W_T_D_tf)
-        compare("W_T_D      vs TF", self.W_T_D_mine, W_T_D_tf)
-        self.done = True
+            return tf_to_matrix(self.tf_buffer.lookup_transform(
+                'world', child, rclpy.time.Time(), timeout=Duration(seconds=5.0)))
+        except Exception as exc:  # noqa: BLE001
+            self.get_logger().warning(f'TF world->{child} nije dostupan: {exc}')
+            return None
 
 
-def main():
-    rclpy.init()
-    node = Task2Cabinet()
+def report(node, cfg):
+    np.set_printoptions(precision=5, suppress=True, linewidth=120)
+    mu = cfg['axis_pos']
+    x, y, z, yaw = cfg['pose']
+    lx, ly, lz = cu.door_size(cfg)
+    print('\n=== Konfiguracija ormarića (/cabinet/config) ===')
+    print(f'  pose (x, y, z, yaw) = ({x:.4f}, {y:.4f}, {z:.4f}, {np.rad2deg(yaw):.2f} deg)')
+    print(f'  vrata l = [lx ly lz] = [{lx:.3f} {ly:.3f} {lz:.3f}] m, '
+          f'mu = axis_pos = {mu}, početni kut = {cfg["initial_angle_deg"]} deg')
+
+    T_WO = cu.T_O_W(cfg)
+    T_OA = cu.T_A_O_closed(cfg)
+    T_WA = cu.T_A_world(cfg)
+    print('\n=== Os rotacije vrata ===')
+    print('  ^O T_A (provjera s JSON-om):')
+    compare('^O T_A  vs T_A_cabinet_closed', T_OA, cfg['T_A_cabinet_closed'])
+    print(f'  hinge točka (ishodište A) u svijetu   : {T_WA[:3, 3]}')
+    print(f'  smjer osi zgloba (z_A) u svijetu      : {T_WA[:3, 2]}')
+    print(f'  zglob u okviru ormarića O             : {T_OA[:3, 3]}')
+
+    T_DA = cu.T_D_A_closed(cfg)
+    print('\n=== Jednadžba (1): ^A T_D(0) ===')
+    print(T_DA)
+    compare('^A T_D(0) vs T_D_hinge_closed', T_DA, cfg['T_D_hinge_closed'])
+
+    phi = cu.phi_from_opening(cfg, cfg['initial_angle_deg'])
+    T_WD = cu.T_D_world(cfg, cfg['initial_angle_deg'])
+    print(f'\n=== Jednadžba (2): ^W T_D(phi), phi = mu*theta = {np.rad2deg(phi):.1f} deg ===')
+    print(T_WD)
+
+    print('\n=== Usporedba ===')
+    compare('izračun vs T_D_world_initial (JSON)', T_WD, cfg['T_D_world_initial'])
+    T_tf_D = node.lookup('cabinet_D_initial')
+    if T_tf_D is not None:
+        compare('izračun vs TF cabinet_D_initial', T_WD, T_tf_D)
+    T_tf_O = node.lookup('cabinet_origin')
+    if T_tf_O is not None:
+        compare('^W T_O vs TF cabinet_origin', T_WO, T_tf_O)
+
+    print('\n=== Poza jastučića prsta u svijetu (jednadžba (3)) za nekoliko kutova ===')
+    for th in (cfg['initial_angle_deg'], 40.0, 60.0, 80.0):
+        T = cu.T_TCP_world(cfg, th)
+        print(f'  theta = {th:5.1f} deg: p = {T[:3, 3]}  z_TCP = {T[:3, 2]}')
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = Task2()
     try:
-        while rclpy.ok() and not node.done:
+        deadline = time.monotonic() + 20.0
+        while rclpy.ok() and node.cfg is None and time.monotonic() < deadline:
             rclpy.spin_once(node, timeout_sec=0.2)
-    except KeyboardInterrupt:
-        pass
-    node.destroy_node()
-    if rclpy.ok():
+        if node.cfg is None:
+            node.get_logger().error('Nije stigla poruka /cabinet/config (je li simulacija pokrenuta?)')
+            return 1
+        for _ in range(20):                      # pusti TF da stigne
+            rclpy.spin_once(node, timeout_sec=0.1)
+        report(node, node.cfg)
+        return 0
+    finally:
+        node.destroy_node()
         rclpy.shutdown()
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    sys.exit(main())
