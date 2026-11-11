@@ -19,9 +19,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'task2 = nrs_lv1_tasks.task2_cabinet:main',
-            'task3_poses = nrs_lv1_tasks.task3_fingertip_pose:main',
-            'task3 = nrs_lv1_tasks.task3_open_door:main',
+            'task2_cabinet = nrs_lv1_tasks.task2_cabinet:main',
+            'task3_open_door = nrs_lv1_tasks.task3_open_door:main',
+            'task2 = nrs_lv1_tasks.task2_cabinet:main'
         ],
     },
 )

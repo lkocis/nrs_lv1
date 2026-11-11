@@ -1,24 +1,30 @@
 #!/usr/bin/env python3
-"""Zadatak 3: otvaranje vrata ormarića povlačenjem/guranjem s unutarnje (stražnje) strane krila.
+"""Zadatak 3: otvaranje vrata ormarića povlačenjem s unutarnje (stražnje) strane krila.
 
-Postupak (sve poze u okviru `world`, planira se za tool0 jer je to vrh kinematičkog lanca
-grupe ur_manipulator; poza TCP-a `finger_tip` pretvara se u pozu tool0 preko TF-a):
+Sve poze vrha prsta (finger_tip) računaju se jednadžbom (3):
+    ^W T_TCP(phi) = ^W T_D(phi) ^D T_TCP
+s jednim, fiksnim ^D T_TCP: prst prelazi preko gornjeg ruba krila, gleda prema dolje,
+a jastučić pritišće unutarnju plohu krila (cabinet_utils.T_D_TCP).
 
-  1. učitaj /cabinet/config, dodaj ormarić (ploče + krilo) u MoveIt planning scene,
-  2. T_TCP(theta) = ^W T_D(theta) ^D T_TCP            (jednadžbe (2) i (3))
-  3. staging  : ispred otvora, sa strane slobodnog ruba, jastučić `clearance` iza krila  (OMPL)
-  4. pre      : klizanje prsta kroz procjep iza krila                                      (Cartesian, s kolizijama)
-  5. contact  : primicanje jastučića unutarnjoj plohi krila                                (Cartesian)
-  6. sweep    : niz kontaktnih poza T_TCP(theta_k), theta_k = theta_0 ... theta_max        (Cartesian)
-  7. retreat  : odmak od krila i povratak u `home`.
+Slijed:
+  1. ormarić (nepomični dio + krilo na početnom kutu) doda se u MoveIt planning scenu,
+  2. poze:  pre      - iznad gornjeg ruba, iza ravnine krila        (poza prije kontakta)
+            gap      - prst spušten iza krila, još bez dodira
+            contact  - jastučić na unutarnjoj plohi, theta = theta0   (poza pri početnom kontaktu)
+            pull[k]  - kontaktne poze za theta = theta0 + k*step ... theta_max
+            release, up - odmak od krila i podizanje prsta,
+  3. PRIJE gibanja: IK za 'gap' (s provjerom kolizija) i 'pre' iz iste konfiguracije ruke, pa
+     Cartesian putanje (compute_cartesian_path) pre->gap, gap->contact, contact->pull, ->up.
+     Ako neka ne uspije, pokuša se s drugim početnim stanjem za IK (druga konfiguracija ruke),
+  4. izvrši: OMPL do 'pre' -> spuštanje -> kontakt -> povlačenje -> odmak -> OMPL home.
 
-Pokretanje:
-  ros2 run nrs_lv1_tasks task3_open_door --ros-args -p use_sim_time:=true            # puni postupak
+Krilo je u sceni dok se prst spušta iza njega; za kontakt i povlačenje krilo se uklanja iz
+scene (prst ga namjerno dodiruje), a nepomični dio ormarića i stol i dalje se provjeravaju.
+
+Pokretanje (simulacija mora raditi):
+  ros2 run nrs_lv1_tasks task3_open_door --ros-args -p use_sim_time:=true
   ros2 run nrs_lv1_tasks task3_open_door --ros-args -p use_sim_time:=true -p check_only:=true
-      # samo IK provjera dohvatljivosti poza (bez gibanja), korisno za više položaja ormarića
-
-Parametri: theta_max_deg (80), step_deg (2.5), inset (0.03), psi_deg (30), clearance (0.06),
-           vel_scale (0.1; na stvarnom robotu <= 0.2), check_only (false), do_home (true).
+      # samo planiranje i prikaz putanje u RVizu, bez gibanja
 """
 
 import sys
@@ -28,28 +34,31 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import Pose
 from moveit_msgs.action import ExecuteTrajectory, MoveGroup
-from moveit_msgs.msg import (BoundingVolume, CollisionObject, Constraints, JointConstraint,
-                             MotionPlanRequest, OrientationConstraint, PlanningOptions,
-                             PlanningScene, PositionConstraint)
+from moveit_msgs.msg import (CollisionObject, Constraints, DisplayTrajectory, JointConstraint,
+                             MotionPlanRequest, PlanningOptions, PlanningScene, RobotState,
+                             RobotTrajectory)
 from moveit_msgs.srv import ApplyPlanningScene, GetCartesianPath, GetPositionIK
 from rclpy.action import ActionClient
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from sensor_msgs.msg import JointState
 from shape_msgs.msg import SolidPrimitive
 from std_msgs.msg import String
-from tf2_ros import Buffer, TransformListener
+from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from nrs_lv1_tasks import cabinet_utils as cu
 
-GROUP = 'ur_manipulator'
-PLANNING_FRAME = 'world'
-TOOL = 'tool0'
+GROUP = 'ur_manipulator_tcp'      # base_link -> finger_tip (SRDF, zadatak 1)
 TCP = 'finger_tip'
-HOME = {'shoulder_pan_joint': 0.0, 'shoulder_lift_joint': -1.5707963267948966,
-        'elbow_joint': 0.0, 'wrist_1_joint': -1.5707963267948966,
-        'wrist_2_joint': 0.0, 'wrist_3_joint': 0.0}     # grupno stanje "home" iz SRDF-a
-MAX_JOINT_JUMP = 0.6    # rad između susjednih točaka Cartesian putanje (detekcija IK preskoka)
+FRAME = 'world'
+ARM_JOINTS = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
+              'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+HOME = [0.0, -np.pi / 2, 0.0, -np.pi / 2, 0.0, 0.0]          # SRDF "home"
+JOINT_LIMIT = np.array([2 * np.pi, 2 * np.pi, np.pi, 2 * np.pi, 2 * np.pi, 2 * np.pi]) - 0.15
+MAX_STEP = 0.005          # m, korak Cartesian interpolacije
+MAX_JUMP = 0.3            # rad, najveća promjena zgloba između dvije točke putanje
+UR_MAX_VEL = 3.14         # rad/s
 
 
 def pose_msg(T):
@@ -60,304 +69,318 @@ def pose_msg(T):
     return p
 
 
+def robot_state(q):
+    s = RobotState()
+    s.is_diff = True               # ostali zglobovi (šaka) ostaju kao u trenutnom stanju
+    s.joint_state.name = list(ARM_JOINTS)
+    s.joint_state.position = [float(v) for v in q]
+    return s
+
+
+def nearest_turn(q, q_ref):
+    """Pomak zglobova za k*2pi (ista poza) tako da q bude što bliže q_ref, unutar limita.
+
+    IK može vratiti npr. shoulder_lift = +4.66 umjesto -1.62; poza je ista, ali OMPL bi od
+    trenutnog stanja morao okrenuti zglob za puni krug (kroz stol).
+    """
+    q = np.array(q, float)
+    for j in range(6):
+        cands = [q[j] + 2 * np.pi * k for k in (-2, -1, 0, 1, 2)]
+        cands = [c for c in cands if abs(c) <= JOINT_LIMIT[j]]
+        if cands:
+            q[j] = min(cands, key=lambda c: abs(c - q_ref[j]))
+    return q
+
+
 class DoorOpener(Node):
     def __init__(self):
         super().__init__('task3_open_door')
         P = self.declare_parameter
         self.theta_max = P('theta_max_deg', 80.0).value
         self.step = P('step_deg', 2.5).value
-        self.inset = P('inset', cu.DEFAULT_INSET).value
-        self.psi = np.deg2rad(P('psi_deg', float(np.rad2deg(cu.DEFAULT_PSI))).value)
-        self.clearance = P('clearance', 0.06).value
+        self.pre_height = P('pre_height', 0.08).value     # m iznad gornjeg ruba krila
+        self.gap = P('gap', 0.03).value                   # m iza krila pri spuštanju i odmaku
+        self.press = P('press', 0.002).value              # m pritiska u krilo
         self.vel_scale = P('vel_scale', 0.1).value
+        self.contact_speed = P('contact_speed', 0.02).value   # m/s
+        self.attempts = P('ik_attempts', 15).value
         self.check_only = P('check_only', False).value
-        self.do_home = P('do_home', True).value
 
         self.cfg = None
+        self.q_now = None
         self.create_subscription(
             String, '/cabinet/config', self._on_cfg,
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
-
+        self.create_subscription(JointState, '/joint_states', self._on_js, 10)
         self.move_client = ActionClient(self, MoveGroup, 'move_action')
         self.exec_client = ActionClient(self, ExecuteTrajectory, 'execute_trajectory')
-        self.cart_client = self.create_client(GetCartesianPath, 'compute_cartesian_path')
         self.scene_client = self.create_client(ApplyPlanningScene, 'apply_planning_scene')
         self.ik_client = self.create_client(GetPositionIK, 'compute_ik')
-        self.T_tool_tcp = None
+        self.cart_client = self.create_client(GetCartesianPath, 'compute_cartesian_path')
+        self.display_pub = self.create_publisher(DisplayTrajectory, '/display_planned_path', 1)
+        self.rng = np.random.default_rng(0)
 
-    # ------------------------------------------------------------ pomoćno
+    # ------------------------------------------------------------ ROS pomoćno
     def _on_cfg(self, msg):
         if self.cfg is None:
             self.cfg = cu.parse_config(msg.data)
 
-    def spin_until(self, predicate, timeout, what):
+    def _on_js(self, msg):
+        pos = dict(zip(msg.name, msg.position))
+        if all(j in pos for j in ARM_JOINTS):
+            self.q_now = np.array([pos[j] for j in ARM_JOINTS])
+
+    def spin_until(self, done, timeout, what):
         t0 = time.monotonic()
-        while rclpy.ok() and not predicate():
-            rclpy.spin_once(self, timeout_sec=0.1)
+        while rclpy.ok() and not done():
+            rclpy.spin_once(self, timeout_sec=0.05)
             if time.monotonic() - t0 > timeout:
                 raise RuntimeError(f'Istek vremena: {what}')
 
-    def call(self, client, request, timeout=30.0):
-        future = client.call_async(request)
-        self.spin_until(future.done, timeout, f'servis {client.srv_name}')
-        return future.result()
+    def call(self, client, req, timeout=30.0):
+        fut = client.call_async(req)
+        self.spin_until(fut.done, timeout, client.srv_name)
+        return fut.result()
+
+    def current_q(self):
+        for _ in range(10):
+            rclpy.spin_once(self, timeout_sec=0.05)
+        return self.q_now.copy()
 
     def wait_ready(self):
-        self.get_logger().info('Čekam /cabinet/config i MoveIt ...')
+        self.get_logger().info('Čekam /cabinet/config, /joint_states i MoveIt ...')
         self.spin_until(lambda: self.cfg is not None, 30.0, '/cabinet/config')
-        for cl in (self.cart_client, self.scene_client, self.ik_client):
+        self.spin_until(lambda: self.q_now is not None, 30.0, '/joint_states')
+        for cl in (self.scene_client, self.ik_client, self.cart_client):
             if not cl.wait_for_service(timeout_sec=30.0):
-                raise RuntimeError(f'Servis {cl.srv_name} nije dostupan (je li move_group pokrenut?)')
+                raise RuntimeError(f'Servis {cl.srv_name} nije dostupan')
         for ac in (self.move_client, self.exec_client):
             if not ac.wait_for_server(timeout_sec=30.0):
-                raise RuntimeError('Akcijski poslužitelj MoveIt-a nije dostupan')
-        self.spin_until(lambda: self.tf_buffer.can_transform(TOOL, TCP, rclpy.time.Time()),
-                        20.0, f'TF {TOOL}->{TCP} (je li ur5_tooling.xacro ažuriran?)')
-        t = self.tf_buffer.lookup_transform(TOOL, TCP, rclpy.time.Time()).transform
-        self.T_tool_tcp = cu.make_T(
-            cu.R_from_quat([t.rotation.x, t.rotation.y, t.rotation.z, t.rotation.w]),
-            [t.translation.x, t.translation.y, t.translation.z])
-        self.get_logger().info(f'T_tool0_TCP: p = {np.round(self.T_tool_tcp[:3, 3], 4)}')
+                raise RuntimeError('Akcije MoveIt-a nisu dostupne')
 
-    def tool_pose_for_tcp(self, T_w_tcp):
-        """Poza tool0 koja daje željenu pozu TCP-a: ^W T_tool0 = ^W T_TCP (^tool0 T_TCP)^-1."""
-        return T_w_tcp @ cu.inv_T(self.T_tool_tcp)
-
-    def tcp(self, theta, clearance=0.0, shift_x=0.0):
-        """^W T_TCP(theta) s odmakom `clearance` iza krila i pomakom `shift_x` duž x_TCP."""
-        T = cu.T_TCP_world(self.cfg, theta, self.inset, None, clearance, self.psi)
-        if shift_x:
-            T = T @ cu.make_T(None, [shift_x, 0, 0])
-        return T
+    # ------------------------------------------------------------ poze (jednadžba (3))
+    def tcp(self, theta, drop=cu.DROP, clearance=0.0):
+        return cu.T_W_TCP(self.cfg, theta, cu.INSET, drop, clearance)
 
     # ------------------------------------------------------------ planning scene
-    def collision_objects(self, theta):
+    def set_scene(self, theta, with_door=True):
         objs = []
         for name, size, T in cu.collision_boxes_world(self.cfg, theta):
             o = CollisionObject()
-            o.header.frame_id = PLANNING_FRAME
+            o.header.frame_id = FRAME
             o.id = f'cabinet_{name}'
-            prim = SolidPrimitive()
-            prim.type = SolidPrimitive.BOX
-            prim.dimensions = [float(v) for v in size]
-            o.primitives = [prim]
-            o.primitive_poses = [pose_msg(T)]
-            o.operation = CollisionObject.ADD
+            if name == 'door' and not with_door:
+                o.operation = CollisionObject.REMOVE
+            else:
+                prim = SolidPrimitive(type=SolidPrimitive.BOX,
+                                      dimensions=[float(v) for v in size])
+                o.primitives = [prim]
+                o.pose = pose_msg(T)
+                o.primitive_poses = [Pose()]
+                o.operation = CollisionObject.ADD       # ADD postojećeg id-a = zamjena
             objs.append(o)
-        return objs
-
-    def apply_scene(self, objs):
         req = ApplyPlanningScene.Request()
-        req.scene = PlanningScene()
-        req.scene.is_diff = True
+        req.scene = PlanningScene(is_diff=True)
         req.scene.world.collision_objects = objs
         if not self.call(self.scene_client, req).success:
             raise RuntimeError('ApplyPlanningScene nije uspio')
 
-    def move_door_object(self, theta):
-        door = [o for o in self.collision_objects(theta) if o.id == 'cabinet_door'][0]
-        door.operation = CollisionObject.MOVE
-        self.apply_scene([door])
-
-    # ------------------------------------------------------------ IK provjera
-    def ik_ok(self, T_tool, avoid_collisions):
+    # ------------------------------------------------------------ MoveIt servisi
+    def ik(self, T, seed):
         req = GetPositionIK.Request()
         r = req.ik_request
         r.group_name = GROUP
-        r.ik_link_name = TOOL
-        r.avoid_collisions = avoid_collisions
-        r.pose_stamped.header.frame_id = PLANNING_FRAME
-        r.pose_stamped.pose = pose_msg(T_tool)
-        r.timeout = Duration(seconds=0.5).to_msg()
-        return self.call(self.ik_client, req).error_code.val == 1
+        r.ik_link_name = TCP
+        r.avoid_collisions = True
+        r.pose_stamped.header.frame_id = FRAME
+        r.pose_stamped.pose = pose_msg(T)
+        r.robot_state = robot_state(seed)
+        r.timeout = Duration(seconds=0.1).to_msg()
+        res = self.call(self.ik_client, req)
+        if res.error_code.val != 1:
+            return None
+        pos = dict(zip(res.solution.joint_state.name, res.solution.joint_state.position))
+        return np.array([pos[j] for j in ARM_JOINTS])
 
-    def check_reachability(self):
-        thetas = np.arange(self.cfg['initial_angle_deg'], self.theta_max + 1e-6, 5.0)
-        self.get_logger().info('theta[deg]  IK(bez kolizija)  IK(s kolizijama, vrata na tom kutu)')
-        ok_all = True
-        for th in thetas:
-            self.move_door_object(th)
-            T_tool = self.tool_pose_for_tcp(self.tcp(th))
-            a = self.ik_ok(T_tool, False)
-            b = self.ik_ok(T_tool, True)       # jastučić dodiruje krilo -> često "kolizija" za 1-2 mm
-            ok_all &= a
-            print(f'  {th:6.1f}      {"da" if a else "NE":>3s}              {"da" if b else "NE":>3s}')
-        self.move_door_object(self.cfg['initial_angle_deg'])
-        return ok_all
+    def cartesian(self, q_start, poses):
+        """Cartesian putanja TCP-a kroz poze iz stanja q_start -> (niz q, fraction)."""
+        req = GetCartesianPath.Request()
+        req.header.frame_id = FRAME
+        req.start_state = robot_state(q_start)
+        req.group_name = GROUP
+        req.link_name = TCP
+        req.waypoints = [pose_msg(T) for T in poses]
+        req.max_step = MAX_STEP
+        req.jump_threshold = 0.0            # skokove provjeravamo sami (MAX_JUMP)
+        req.avoid_collisions = True
+        res = self.call(self.cart_client, req)
+        qs = [np.array(p.positions) for p in res.solution.joint_trajectory.points]
+        names = list(res.solution.joint_trajectory.joint_names)
+        if not qs:
+            return [np.array(q_start)], 0.0
+        idx = [names.index(j) for j in ARM_JOINTS]
+        qs = [q[idx] for q in qs]
+        fraction = res.fraction
+        for i in range(1, len(qs)):                      # odreži na prvom skoku
+            if np.abs(qs[i] - qs[i - 1]).max() > MAX_JUMP:
+                fraction *= i / len(qs)
+                qs = qs[:i]
+                break
+        return qs, fraction
 
-    # ------------------------------------------------------------ planiranje i izvršavanje
-    def plan_to_tool_pose(self, T_tool, label):
+    # ------------------------------------------------------------ planiranje
+    def plan(self):
+        """Isplanira sve dijelove gibanja za jednu konfiguraciju ruke; vraća rječnik ili None."""
+        th0 = float(self.cfg['initial_angle_deg'])
+        thetas = np.arange(th0 + self.step, self.theta_max + 1e-9, self.step)
+        T_pre = self.tcp(th0, drop=-self.pre_height, clearance=self.gap)
+        T_gap = self.tcp(th0, clearance=self.gap)
+        T_contact = self.tcp(th0, clearance=-self.press)
+        pulls = [self.tcp(th, clearance=-self.press) for th in thetas]
+
+        q_ref = self.current_q()
+        best = None
+        seeds = [q_ref] + [self.rng.uniform(-np.pi, np.pi, 6) for _ in range(self.attempts)]
+        for n, seed in enumerate(seeds):
+            self.set_scene(th0, with_door=True)
+            q_gap = self.ik(T_gap, seed)                  # prst iza krila, bez dodira
+            if q_gap is None:
+                continue
+            q_gap = nearest_turn(q_gap, q_ref)
+            q_pre = self.ik(T_pre, q_gap)                 # ista konfiguracija ruke
+            if q_pre is None or np.abs(q_pre - q_gap).max() > 1.0:
+                continue
+            down, f_down = self.cartesian(q_pre, [T_gap])
+            if f_down < 0.999:
+                continue
+            self.set_scene(th0, with_door=False)          # dalje prst dodiruje krilo
+            touch, f_touch = self.cartesian(down[-1], [T_contact])
+            if f_touch < 0.999:
+                continue
+            pull, f_pull = self.cartesian(touch[-1], pulls)
+            n_ok = int(np.floor(f_pull * len(pulls) + 1e-6))
+            th_end = thetas[n_ok - 1] if n_ok > 0 else th0
+            out, f_out = self.cartesian(pull[-1], [
+                self.tcp(th_end, clearance=self.gap),
+                self.tcp(th_end, drop=-self.pre_height, clearance=self.gap)])
+            self.get_logger().info(
+                f'  pokušaj {n}: povlačenje do {th_end:.1f} deg, odmak {100 * f_out:.0f} %')
+            if best is None or th_end > best['theta_end']:
+                best = dict(q_pre=q_pre, down=down, touch=touch, pull=pull, out=out,
+                            theta_end=th_end)
+            if th_end >= self.theta_max - 1e-6 and f_out > 0.999:
+                break
+        self.set_scene(th0, with_door=True)               # scena natrag na stvarno stanje
+        return best
+
+    # ------------------------------------------------------------ izvršavanje
+    def move_to_joints(self, q, label):
         req = MotionPlanRequest()
         req.group_name = GROUP
         req.pipeline_id = 'ompl'
         req.planner_id = 'RRTConnectkConfigDefault'
-        req.num_planning_attempts = 10
-        req.allowed_planning_time = 10.0
-        req.max_velocity_scaling_factor = self.vel_scale
-        req.max_acceleration_scaling_factor = self.vel_scale
-        req.start_state.is_diff = True
-
-        pc = PositionConstraint()
-        pc.header.frame_id = PLANNING_FRAME
-        pc.link_name = TOOL
-        sphere = SolidPrimitive()
-        sphere.type = SolidPrimitive.SPHERE
-        sphere.dimensions = [0.002]
-        pc.constraint_region = BoundingVolume(primitives=[sphere],
-                                              primitive_poses=[pose_msg(T_tool)])
-        pc.weight = 1.0
-        oc = OrientationConstraint()
-        oc.header.frame_id = PLANNING_FRAME
-        oc.link_name = TOOL
-        oc.orientation = pose_msg(T_tool).orientation
-        oc.absolute_x_axis_tolerance = oc.absolute_y_axis_tolerance = 0.01
-        oc.absolute_z_axis_tolerance = 0.01
-        oc.weight = 1.0
-        c = Constraints()
-        c.position_constraints = [pc]
-        c.orientation_constraints = [oc]
-        req.goal_constraints = [c]
-        return self._send_move_goal(req, label)
-
-    def plan_to_joints(self, joints, label):
-        req = MotionPlanRequest()
-        req.group_name = GROUP
-        req.pipeline_id = 'ompl'
-        req.planner_id = 'RRTConnectkConfigDefault'
-        req.num_planning_attempts = 10
-        req.allowed_planning_time = 10.0
+        req.num_planning_attempts = 4
+        req.allowed_planning_time = 15.0
         req.max_velocity_scaling_factor = self.vel_scale
         req.max_acceleration_scaling_factor = self.vel_scale
         req.start_state.is_diff = True
         c = Constraints()
-        for name, val in joints.items():
-            jc = JointConstraint()
-            jc.joint_name, jc.position = name, float(val)
-            jc.tolerance_above = jc.tolerance_below = 0.001
-            jc.weight = 1.0
-            c.joint_constraints.append(jc)
+        for name, val in zip(ARM_JOINTS, q):
+            c.joint_constraints.append(JointConstraint(
+                joint_name=name, position=float(val),
+                tolerance_above=0.001, tolerance_below=0.001, weight=1.0))
         req.goal_constraints = [c]
-        return self._send_move_goal(req, label)
-
-    def _send_move_goal(self, req, label):
-        goal = MoveGroup.Goal()
-        goal.request = req
-        goal.planning_options = PlanningOptions()
-        goal.planning_options.plan_only = False          # planiraj i izvrši
+        goal = MoveGroup.Goal(request=req, planning_options=PlanningOptions())
+        goal.planning_options.plan_only = False
         goal.planning_options.planning_scene_diff.is_diff = True
         goal.planning_options.planning_scene_diff.robot_state.is_diff = True
         fut = self.move_client.send_goal_async(goal)
-        self.spin_until(fut.done, 30.0, 'prihvat cilja move_action')
-        handle = fut.result()
-        if not handle.accepted:
-            self.get_logger().error(f'[{label}] cilj odbijen')
-            return False
-        res_fut = handle.get_result_async()
-        self.spin_until(res_fut.done, 180.0, f'izvršenje [{label}]')
+        self.spin_until(fut.done, 30.0, 'move_action')
+        res_fut = fut.result().get_result_async()
+        self.spin_until(res_fut.done, 300.0, label)
         code = res_fut.result().result.error_code.val
-        self.get_logger().info(f'[{label}] MoveIt error_code = {code} ({"OK" if code == 1 else "NEUSPJEH"})')
+        status = 'OK' if code == 1 else 'NEUSPJEH'
+        self.get_logger().info(f'[{label}] error_code = {code} ({status})')
         return code == 1
 
-    def cartesian(self, tcp_poses, label, avoid_collisions=True, max_step=0.005):
-        """Cartesian putanja kroz poze TCP-a; vraća (uspjeh, fraction). Izvršava ono što je izračunato."""
-        req = GetCartesianPath.Request()
-        req.header.frame_id = PLANNING_FRAME
-        req.group_name = GROUP
-        req.link_name = TOOL
-        req.waypoints = [pose_msg(self.tool_pose_for_tcp(T)) for T in tcp_poses]
-        req.max_step = max_step
-        req.jump_threshold = 0.0               # preskoke zglobova provjeravamo sami (MAX_JOINT_JUMP)
-        req.avoid_collisions = avoid_collisions
-        res = self.call(self.cart_client, req)
-        traj = res.solution.joint_trajectory
-        n = len(traj.points)
-        if n < 2:
-            self.get_logger().error(f'[{label}] prazna putanja (fraction={res.fraction:.2f})')
-            return False, res.fraction
-        q = np.array([p.positions for p in traj.points])
-        jumps = np.abs(np.diff(q, axis=0)).max(axis=1)
-        if jumps.max() > MAX_JOINT_JUMP:
-            cut = int(np.argmax(jumps > MAX_JOINT_JUMP)) + 1
-            self.get_logger().warning(f'[{label}] preskok IK rješenja ({jumps.max():.2f} rad), '
-                                      f'putanja skraćena na {cut}/{n} točaka')
-            traj.points = traj.points[:cut]
-            res.fraction *= cut / n
-            q = q[:cut]
-        self.get_logger().info(f'[{label}] Cartesian fraction = {res.fraction:.3f}, točaka = {len(traj.points)}')
-        self._retime(traj, q)
-        goal = ExecuteTrajectory.Goal()
-        goal.trajectory = res.solution
-        goal.trajectory.joint_trajectory = traj
-        fut = self.exec_client.send_goal_async(goal)
-        self.spin_until(fut.done, 30.0, 'prihvat execute_trajectory')
-        handle = fut.result()
-        if not handle.accepted:
-            self.get_logger().error(f'[{label}] izvršenje odbijeno')
-            return False, res.fraction
-        rf = handle.get_result_async()
-        self.spin_until(rf.done, 300.0, f'izvršenje [{label}]')
-        code = rf.result().result.error_code.val
-        return code == 1 and res.fraction > 0.95, res.fraction
+    def trajectory(self, qs, dt_min):
+        """Vremena točaka: ograničena brzina zglobova i najmanje dt_min po točki."""
+        qs = np.asarray(qs)
+        t = [0.0]
+        for i in range(1, len(qs)):
+            dq = float(np.abs(qs[i] - qs[i - 1]).max())
+            t.append(t[-1] + max(dq / (UR_MAX_VEL * self.vel_scale), dt_min))
+        t = np.array(t)
+        v = np.zeros_like(qs)
+        if len(qs) > 2:
+            v[1:-1] = (qs[2:] - qs[:-2]) / (t[2:] - t[:-2])[:, None]
+        jt = JointTrajectory(joint_names=list(ARM_JOINTS))
+        for qi, vi, ti in zip(qs, v, t):
+            jt.points.append(JointTrajectoryPoint(
+                positions=[float(x) for x in qi], velocities=[float(x) for x in vi],
+                time_from_start=Duration(seconds=float(ti)).to_msg()))
+        return jt
 
-    def _retime(self, traj, q):
-        """Vremenska parametrizacija: ograničena brzina zglobova (rad/s) skalirana s vel_scale."""
-        max_vel = 1.0 * self.vel_scale * 3.0           # ~0.3 rad/s za vel_scale = 0.1
-        t = 0.0
-        for i, pt in enumerate(traj.points):
-            if i > 0:
-                t += max(float(np.abs(q[i] - q[i - 1]).max()) / max_vel, 0.02)
-            pt.time_from_start = Duration(seconds=t).to_msg()
-            pt.velocities = []
-            pt.accelerations = []
+    def execute(self, qs, label):
+        if len(qs) < 2:
+            return True
+        q_now = self.current_q()
+        if np.abs(q_now - qs[0]).max() > 0.05:
+            self.get_logger().error(f'[{label}] robot nije na početku putanje')
+            return False
+        qs = [q_now] + list(qs[1:])
+        goal = ExecuteTrajectory.Goal()
+        goal.trajectory = RobotTrajectory(
+            joint_trajectory=self.trajectory(qs, MAX_STEP / self.contact_speed))
+        fut = self.exec_client.send_goal_async(goal)
+        self.spin_until(fut.done, 30.0, 'execute_trajectory')
+        res_fut = fut.result().get_result_async()
+        self.spin_until(res_fut.done, 600.0, label)
+        code = res_fut.result().result.error_code.val
+        self.get_logger().info(f'[{label}] {len(qs)} točaka, error_code = {code}')
+        return code == 1
+
+    def display(self, p):
+        qs = p['down'] + p['touch'][1:] + p['pull'][1:] + p['out'][1:]
+        msg = DisplayTrajectory(trajectory_start=robot_state(qs[0]))
+        msg.trajectory = [RobotTrajectory(joint_trajectory=self.trajectory(qs, 0.05))]
+        self.display_pub.publish(msg)
 
     # ------------------------------------------------------------ glavni postupak
     def run(self):
         self.wait_ready()
-        cfg = self.cfg
-        th0 = float(cfg['initial_angle_deg'])
-        self.get_logger().info(
-            f'Ormarić pose={np.round(cfg["pose"], 3).tolist()}, axis_pos={cfg["axis_pos"]}, theta0={th0} deg')
-        self.apply_scene(self.collision_objects(th0))
+        th0 = float(self.cfg['initial_angle_deg'])
+        self.get_logger().info(f'Ormarić pose = {np.round(self.cfg["pose"], 3).tolist()}, '
+                               f'axis_pos = {self.cfg["axis_pos"]}, theta0 = {th0} deg')
+        np.set_printoptions(precision=4, suppress=True)
+        self.get_logger().info(f'^D T_TCP =\n{cu.T_D_TCP(self.cfg)}')
+        self.get_logger().info(f'^W T_TCP (početni kontakt) =\n{self.tcp(th0)}')
 
+        p = self.plan()
+        if p is None:
+            self.get_logger().error('Nema izvedivog plana (IK/kolizija) za ovaj položaj ormarića')
+            return 2
+        self.get_logger().info(f'Plan: otvaranje do {p["theta_end"]:.1f} deg, '
+                               f'q_pre = {np.round(p["q_pre"], 3).tolist()}')
+        self.display(p)
         if self.check_only:
-            ok = self.check_reachability()
-            return 0 if ok else 2
+            return 0
 
-        # 1) staging: izvan procjepa (u ravnini krila, `stage_back` od mjesta kontakta), jastučić iza krila
-        stage_back = 0.10
-        T_pre = self.tcp(th0, clearance=self.clearance)
-        T_stage = self.tcp(th0, clearance=self.clearance, shift_x=-stage_back)
-        if not self.plan_to_tool_pose(self.tool_pose_for_tcp(T_stage), 'staging (OMPL)'):
+        if not self.move_to_joints(p['q_pre'], '1 OMPL do poze prije kontakta'):
             return 3
-        # 2) klizanje prsta kroz procjep iza krila (s provjerom kolizija)
-        ok, frac = self.cartesian([T_pre], 'pre-contact (klizanje)', True)
-        if not ok:
+        if not self.execute(p['down'], '2 spuštanje prsta iza krila'):
             return 4
-        # 3) primicanje jastučića plohi krila (zadnji centimetar bez provjere kolizije s krilom)
-        ok, frac = self.cartesian([self.tcp(th0, clearance=0.01)], 'primicanje', True)
-        if not ok:
+        self.set_scene(th0, with_door=False)
+        if not self.execute(p['touch'], '3 kontakt s unutarnjom plohom'):
             return 5
-        ok, frac = self.cartesian([self.tcp(th0, clearance=0.0)], 'kontakt', False)
-        if not ok:
+        if not self.execute(p['pull'], f'4 povlačenje {th0:.0f} -> {p["theta_end"]:.0f} deg'):
             return 6
-
-        # 4) niz kontaktnih poza za rastući kut (jednadžba (3))
-        thetas = np.arange(th0 + self.step, self.theta_max + 1e-9, self.step)
-        poses = [self.tcp(th) for th in thetas]
-        ok, frac = self.cartesian(poses, f'otvaranje {th0:.0f} -> {self.theta_max:.0f} deg', False)
-        reached = th0 + frac * (self.theta_max - th0)
-        self.get_logger().info(f'Doseženi kut otvorenosti ~ {reached:.1f} deg '
-                               f'({"puni raspon" if ok else "DJELOMIČNO - pogledaj poruke iznad"})')
-
-        # 5) odmak od krila (suprotno od z_TCP), krilo u sceni na doseženi kut, povratak u home
-        self.move_door_object(reached)
-        T_back = self.tcp(reached, clearance=self.clearance)
-        self.cartesian([T_back], 'odmak od krila', False)
-        if self.do_home and not self.plan_to_joints(HOME, 'home'):
-            self.get_logger().warning('Povratak u home nije uspio - provjeri scenu u RVizu')
-        return 0 if ok else 7
+        if not self.execute(p['out'], '5 odmak i podizanje prsta'):
+            return 7
+        self.set_scene(p['theta_end'], with_door=True)
+        self.move_to_joints(HOME, '6 OMPL home')
+        self.get_logger().info(f'Gotovo: vrata otvorena na ~{p["theta_end"]:.1f} deg')
+        return 0
 
 
 def main(args=None):
@@ -372,7 +395,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
     sys.exit(code)
 
 
