@@ -7,8 +7,7 @@
       ft300_mounting_plate   spojnica FT300S na prirubnicu UR5, z = 0
       ft300_sensor           senzor; okvir je na izlaznoj plohi z = 0.0415 m, zakrenut za pi oko y
       ft300_tool_flange      izlazna ploha senzora, orijentirana kao tool0 (poništava zakret pi)
-        robotiq_3f_frame     okvir šake: 12.7 mm ispred izlazne plohe (debljina AGS_wrist),
-                             ista rpy kao u originalnoj montaži šake iz uputa
+        robotiq_3f_frame     okvir šake: 12.7 mm ispred izlazne plohe (debljina AGS_wrist)
           finger_tip         TCP: jastučić distalnog članka prsta A
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
@@ -23,7 +22,8 @@
       <origin xyz="0 0 0" rpy="0 0 0"/>
     </xacro:robotiq_ft300s>
 
-    <!-- 2) Izlazna ploha senzora s orijentacijom tool0 (ft300_sensor je zakrenut za pi oko y) -->
+    <!-- 2) Izlazna ploha senzora s orijentacijom tool0 (Okvir ft300_sensor je u modelu zakrenut za 180° oko y, 
+            pa mu z-os gleda natrag prema robotu. Šaka montirana izravno na njega bila bi okrenuta naopako.) -->
     <link name="${prefix}ft300_tool_flange"/>
     <joint name="${prefix}ft300_tool_flange_joint" type="fixed">
       <parent link="${prefix}ft300_sensor"/>
@@ -31,15 +31,15 @@
       <origin xyz="0 0 0" rpy="0 ${pi} 0"/>
     </joint>
 
-    <!-- 3) Šaka na izlaznu plohu senzora: ista montaža kao u uputama, samo je roditelj senzor -->
+    <!-- 3) Šaka na izlaznu plohu senzora, već postojećem kodu promijenjeno samo da se šaka veže 
+            na izlaznu plohu senzora (ft300_tool_flange) -->
     <xacro:robotiq_3f_gripper parent="${prefix}ft300_tool_flange" prefix="${prefix}"
       include_cable_plugs="${include_cable_plugs}" articulated="${articulated_gripper}"
       joint_damping="${gripper_joint_damping}" joint_friction="${gripper_joint_friction}">
       <origin xyz="0 0 0.0127" rpy="1.5707963267948966 0 -0.7853981633974483"/>
     </xacro:robotiq_3f_gripper>
 
-    <!--
-      4) TCP za dodir s vratima: sredina jastučića distalnog članka prsta A (otvoreni prsti).
+    <!-- 4) TCP za dodir s vratima: sredina jastučića distalnog članka prsta A (otvoreni prsti).
          Zadan u okviru robotiq_3f_frame:
            x_TCP = smjer prsta (+y šake), z_TCP = vanjska normala jastučića (-x šake), y_TCP = -z šake
            R = [[0,0,-1],[1,0,0],[0,-1,0]]  ->  rpy = (-pi/2, 0, pi/2)
