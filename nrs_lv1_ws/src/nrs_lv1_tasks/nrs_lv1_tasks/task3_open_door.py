@@ -152,7 +152,9 @@ class DoorOpener(Node):
         return cu.T_W_TCP(self.cfg, theta, cu.INSET, drop, clearance) # Poza vrha prsta u svijetu
 
     # ------------------------------------------------------------ planning scene
-    def set_scene(self, theta, with_door=True):
+    def set_scene(self, theta, with_door=True): 
+    # usklađuje “sliku svijeta” koju ima MoveIt sa stvarnim stanjem ormarića: 
+    # gdje su ploče i pod kojim je kutom krilo.
         objs = []
         for name, size, T in cu.collision_boxes_world(self.cfg, theta):
             o = CollisionObject()
@@ -166,10 +168,10 @@ class DoorOpener(Node):
                 o.primitives = [prim]
                 o.pose = pose_msg(T)
                 o.primitive_poses = [Pose()]
-                o.operation = CollisionObject.ADD       # Ako objekt s tim imenom već postoji, zamijeni se, pa se tako krilo “pomiče” na novi kut.
+                o.operation = CollisionObject.ADD  # Ako objekt s tim imenom već postoji, zamijeni se, pa se tako krilo “pomiče” na novi kut.
             objs.append(o)
-        req = ApplyPlanningScene.Request()
-        req.scene = PlanningScene(is_diff=True)
+        req = ApplyPlanningScene.Request() # zahtjev za izmjenu scene
+        req.scene = PlanningScene(is_diff=True) # mijenjaju se samo navedeni objekti, a ostatak scene ostaje.
         req.scene.world.collision_objects = objs
         if not self.call(self.scene_client, req).success:
             raise RuntimeError('ApplyPlanningScene nije uspio')
@@ -202,7 +204,7 @@ class DoorOpener(Node):
         req.link_name = TCP
         req.waypoints = [pose_msg(T) for T in poses]
         req.max_step = MAX_STEP
-        req.jump_threshold = 0.0            # skokove provjeravamo sami (MAX_JUMP)
+        req.jump_threshold = 0.0            # MoveIt-ova provjera skokova isključena
         req.avoid_collisions = True
         res = self.call(self.cart_client, req)
         qs = [np.array(p.positions) for p in res.solution.joint_trajectory.points] # niz kutova zglobova, po jedan za svaku točku putanje.
@@ -224,7 +226,7 @@ class DoorOpener(Node):
     # ------------------------------------------------------------ planiranje
     def plan(self):
         """Isplanira sve dijelove gibanja za jednu konfiguraciju ruke; vraća rječnik ili None."""
-        th0 = float(self.cfg['initial_angle_deg'])
+        th0 = float(self.cfg['initial_angle_deg']) # 20°
         thetas = np.arange(th0 + self.step, self.theta_max + 1e-9, self.step)
         T_pre = self.tcp(th0, drop=-self.pre_height, clearance=self.gap) # poza prije kontakta
         T_gap = self.tcp(th0, clearance=self.gap) # prst iza krila
@@ -233,26 +235,26 @@ class DoorOpener(Node):
 
         q_ref = self.current_q()
         best = None
-        seeds = [q_ref] + [self.rng.uniform(-np.pi, np.pi, 6) for _ in range(self.attempts)]
-        for n, seed in enumerate(seeds):
+        seeds = [q_ref] + [self.rng.uniform(-np.pi, np.pi, 6) for _ in range(self.attempts)] # Prvo sjeme je trenutno stanje robota, a zatim 15 nasumičnih
+        for n, seed in enumerate(seeds): # pokušaji različitih konfig. ruke
             self.set_scene(th0, with_door=True)
             q_gap = self.ik(T_gap, seed)                  # za pozu prst iza krila, odabire konfig. ruke
             if q_gap is None:
-                continue
+                continue        # ako nema rješenja, sljedeće sjeme
             q_gap = nearest_turn(q_gap, q_ref) # ispravak 2pi
             q_pre = self.ik(T_pre, q_gap)                 # ik za pozu prije kontakta, ista konfiguracija ruke
             if q_pre is None or np.abs(q_pre - q_gap).max() > 1.0:
                 continue
             # Cartesian za svaki dio pokreta (spuštanje, dodir, povlačenje, odmak)
             down, f_down = self.cartesian(q_pre, [T_gap])
-            if f_down < 0.999:
+            if f_down < 0.999: # pokret mora uspjeti cijeli, inače se ne ide dalje
                 continue
             self.set_scene(th0, with_door=False)          
             touch, f_touch = self.cartesian(down[-1], [T_contact])
             if f_touch < 0.999:
                 continue
             pull, f_pull = self.cartesian(touch[-1], pulls)
-            n_ok = int(np.floor(f_pull * len(pulls) + 1e-6))
+            n_ok = int(np.floor(f_pull * len(pulls) + 1e-6)) # iz fraction povlačenja izračuna do kojeg kuta je uspjelo
             th_end = thetas[n_ok - 1] if n_ok > 0 else th0
             out, f_out = self.cartesian(pull[-1], [
                 self.tcp(th_end, clearance=self.gap),
@@ -268,25 +270,25 @@ class DoorOpener(Node):
         return best
 
     # ------------------------------------------------------------ izvršavanje
-    def move_to_joints(self, q, label): # koristi MoveIt akciju move_action
+    def move_to_joints(self, q, label): # koristi MoveIt akciju move_action -> OMPL gibanje
         req = MotionPlanRequest()
         req.group_name = GROUP
         req.pipeline_id = 'ompl'
         req.planner_id = 'RRTConnectkConfigDefault'
-        req.num_planning_attempts = 4
-        req.allowed_planning_time = 15.0
-        req.max_velocity_scaling_factor = self.vel_scale
-        req.max_acceleration_scaling_factor = self.vel_scale
+        req.num_planning_attempts = 4                       # 4 pokušaja
+        req.allowed_planning_time = 15.0                    # najviše 15s
+        req.max_velocity_scaling_factor = self.vel_scale    # 10% brzine
+        req.max_acceleration_scaling_factor = self.vel_scale  # 10% ubrzanja
         req.start_state.is_diff = True
-        c = Constraints()
+        c = Constraints()  # cilj je zadan kao kutovi zglobova
         for name, val in zip(ARM_JOINTS, q):
             c.joint_constraints.append(JointConstraint(
                 joint_name=name, position=float(val),
                 tolerance_above=0.001, tolerance_below=0.001, weight=1.0))
         req.goal_constraints = [c]
-        goal = MoveGroup.Goal(request=req, planning_options=PlanningOptions())
-        goal.planning_options.plan_only = False
-        goal.planning_options.planning_scene_diff.is_diff = True
+        goal = MoveGroup.Goal(request=req, planning_options=PlanningOptions()) 
+        goal.planning_options.plan_only = False # MoveIt nakon planiranja izvrši gibanje
+        goal.planning_options.planning_scene_diff.is_diff = True  # koristi trenutnu scenu 
         goal.planning_options.planning_scene_diff.robot_state.is_diff = True
         fut = self.move_client.send_goal_async(goal)
         self.spin_until(fut.done, 30.0, 'move_action')
@@ -298,16 +300,17 @@ class DoorOpener(Node):
         return code == 1
 
     def trajectory(self, qs, dt_min): # točkama putanje dodijeli vremena i brzine
+        # za svaku točku izračuna u kojem trenutku robot mora biti tamo.
         qs = np.asarray(qs)
         t = [0.0]
         for i in range(1, len(qs)):
             dq = float(np.abs(qs[i] - qs[i - 1]).max())
-            t.append(t[-1] + max(dq / (UR_MAX_VEL * self.vel_scale), dt_min))
+            t.append(t[-1] + max(dq / (UR_MAX_VEL * self.vel_scale), dt_min)) # vremena potrebnog najbržem zglobu: najveća promjena kuta / (3.14 rad/s × 0.1), dt_min.
         t = np.array(t)
         v = np.zeros_like(qs)
         if len(qs) > 2:
             v[1:-1] = (qs[2:] - qs[:-2]) / (t[2:] - t[:-2])[:, None]
-        jt = JointTrajectory(joint_names=list(ARM_JOINTS))
+        jt = JointTrajectory(joint_names=list(ARM_JOINTS)) # složi ROS poruku putanje: za svaku točku kutove, brzine i vrijeme.
         for qi, vi, ti in zip(qs, v, t):
             jt.points.append(JointTrajectoryPoint(
                 positions=[float(x) for x in qi], velocities=[float(x) for x in vi],
@@ -321,10 +324,9 @@ class DoorOpener(Node):
         if np.abs(q_now - qs[0]).max() > 0.05:
             self.get_logger().error(f'[{label}] robot nije na početku putanje')
             return False
-        qs = [q_now] + list(qs[1:])
+        qs = [q_now] + list(qs[1:])  # prva točka se zamijeni stvarnim stanjem, jer MoveIt odbija putanju koja ne počinje točno gdje je robot.
         goal = ExecuteTrajectory.Goal()
-        goal.trajectory = RobotTrajectory(
-            joint_trajectory=self.trajectory(qs, MAX_STEP / self.contact_speed))
+        goal.trajectory = RobotTrajectory(joint_trajectory=self.trajectory(qs, MAX_STEP / self.contact_speed))
         fut = self.exec_client.send_goal_async(goal)
         self.spin_until(fut.done, 30.0, 'execute_trajectory')
         res_fut = fut.result().get_result_async()
@@ -343,8 +345,7 @@ class DoorOpener(Node):
     def run(self):
         self.wait_ready()
         th0 = float(self.cfg['initial_angle_deg'])
-        self.get_logger().info(f'Ormarić pose = {np.round(self.cfg["pose"], 3).tolist()}, '
-                               f'axis_pos = {self.cfg["axis_pos"]}, theta0 = {th0} deg')
+        self.get_logger().info(f'Ormarić pose = {np.round(self.cfg["pose"], 3).tolist()}, 'f'axis_pos = {self.cfg["axis_pos"]}, theta0 = {th0} deg')
         np.set_printoptions(precision=4, suppress=True)
         self.get_logger().info(f'^D T_TCP =\n{cu.T_D_TCP(self.cfg)}')
         self.get_logger().info(f'^W T_TCP (početni kontakt) =\n{self.tcp(th0)}')
