@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Zadatak 3: otvaranje vrata ormarića povlačenjem s unutarnje (stražnje) strane krila.
-
-Sve poze vrha prsta (finger_tip) računaju se jednadžbom (3):
-    ^W T_TCP(phi) = ^W T_D(phi) ^D T_TCP
-s jednim, fiksnim ^D T_TCP: prst prelazi preko gornjeg ruba krila, gleda prema dolje,
-a jastučić pritišće unutarnju plohu krila (cabinet_utils.T_D_TCP).
+"""Zadatak 3: otvaranje vrata ormarića povlačenjem s unutarnje strane krila.
 
 Slijed:
   1. ormarić (nepomični dio + krilo na početnom kutu) doda se u MoveIt planning scenu,
@@ -49,16 +44,15 @@ from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 
 from nrs_lv1_tasks import cabinet_utils as cu
 
-GROUP = 'ur_manipulator_tcp'      # base_link -> finger_tip (SRDF, zadatak 1)
-TCP = 'finger_tip'
+GROUP = 'ur_manipulator_tcp'      # base_link -> finger_tip 
+TCP = 'finger_tip'                # link čiju pozu zadajemo
 FRAME = 'world'
-ARM_JOINTS = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint',
-              'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
+ARM_JOINTS = ['shoulder_pan_joint', 'shoulder_lift_joint', 'elbow_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint']
 HOME = [0.0, -np.pi / 2, 0.0, -np.pi / 2, 0.0, 0.0]          # SRDF "home"
 JOINT_LIMIT = np.array([2 * np.pi, 2 * np.pi, np.pi, 2 * np.pi, 2 * np.pi, 2 * np.pi]) - 0.15
-MAX_STEP = 0.005          # m, korak Cartesian interpolacije
-MAX_JUMP = 0.3            # rad, najveća promjena zgloba između dvije točke putanje
-UR_MAX_VEL = 3.14         # rad/s
+MAX_STEP = 0.005          # Cartesian putanja u koracima od 5 mm
+MAX_JUMP = 0.3            # najveći dopušteni skok zgloba između dvije točke (rad)
+UR_MAX_VEL = 3.14         # najveća brzina zgloba UR5 (rad/s)
 
 
 def pose_msg(T):
@@ -67,7 +61,7 @@ def pose_msg(T):
     q = cu.quat_from_R(T[:3, :3])
     p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = map(float, q)
     return p
-
+# MoveIt servisi primaju poze kao Pose, a mi računamo s matricama, pa je ovo pretvorba (obrnuto od tf_to_matrix u zadatku 2).
 
 def robot_state(q):
     s = RobotState()
@@ -77,12 +71,7 @@ def robot_state(q):
     return s
 
 
-def nearest_turn(q, q_ref):
-    """Pomak zglobova za k*2pi (ista poza) tako da q bude što bliže q_ref, unutar limita.
-
-    IK može vratiti npr. shoulder_lift = +4.66 umjesto -1.62; poza je ista, ali OMPL bi od
-    trenutnog stanja morao okrenuti zglob za puni krug (kroz stol).
-    """
+def nearest_turn(q, q_ref): # ispravlja zglobove pomaknute za puni krug (pomak zglobova za k*2pi)
     q = np.array(q, float)
     for j in range(6):
         cands = [q[j] + 2 * np.pi * k for k in (-2, -1, 0, 1, 2)]
@@ -96,15 +85,15 @@ class DoorOpener(Node):
     def __init__(self):
         super().__init__('task3_open_door')
         P = self.declare_parameter
-        self.theta_max = P('theta_max_deg', 80.0).value
-        self.step = P('step_deg', 2.5).value
+        self.theta_max = P('theta_max_deg', 80.0).value   # do kojeg kuta se vrata otvaraju
+        self.step = P('step_deg', 2.5).value              # razmak kontaktnih poza
         self.pre_height = P('pre_height', 0.08).value     # m iznad gornjeg ruba krila
         self.gap = P('gap', 0.03).value                   # m iza krila pri spuštanju i odmaku
         self.press = P('press', 0.002).value              # m pritiska u krilo
-        self.vel_scale = P('vel_scale', 0.1).value
-        self.contact_speed = P('contact_speed', 0.02).value   # m/s
-        self.attempts = P('ik_attempts', 15).value
-        self.check_only = P('check_only', False).value
+        self.vel_scale = P('vel_scale', 0.1).value        # 10 % najveće brzine robota
+        self.contact_speed = P('contact_speed', 0.02).value   # brzina prsta uz krilo
+        self.attempts = P('ik_attempts', 15).value        # koliko nasumičnih pokušaja IK-a
+        self.check_only = P('check_only', False).value    # samo planira, bez gibanja
 
         self.cfg = None
         self.q_now = None
@@ -121,33 +110,33 @@ class DoorOpener(Node):
         self.rng = np.random.default_rng(0)
 
     # ------------------------------------------------------------ ROS pomoćno
-    def _on_cfg(self, msg):
+    def _on_cfg(self, msg): # poruka s /cabinet/config
         if self.cfg is None:
             self.cfg = cu.parse_config(msg.data)
 
-    def _on_js(self, msg):
+    def _on_js(self, msg): # poruka s /joint_states
         pos = dict(zip(msg.name, msg.position))
         if all(j in pos for j in ARM_JOINTS):
-            self.q_now = np.array([pos[j] for j in ARM_JOINTS])
+            self.q_now = np.array([pos[j] for j in ARM_JOINTS]) # Napravi rječnik ime → kut i iz njega uzme 6 zglobova ruke, redom kao u ARM_JOINTS.
 
-    def spin_until(self, done, timeout, what):
+    def spin_until(self, done, timeout, what): # Koristi se za čekanje na sve: poruke, servise, akcije.
         t0 = time.monotonic()
         while rclpy.ok() and not done():
             rclpy.spin_once(self, timeout_sec=0.05)
             if time.monotonic() - t0 > timeout:
                 raise RuntimeError(f'Istek vremena: {what}')
 
-    def call(self, client, req, timeout=30.0):
+    def call(self, client, req, timeout=30.0): # Pozove servis i čeka odgovor
         fut = client.call_async(req)
         self.spin_until(fut.done, timeout, client.srv_name)
         return fut.result()
 
-    def current_q(self):
+    def current_q(self): # Pola sekunde vrti čvor, da stigne najnovija poruka /joint_states, i vrati trenutne kutove zglobova.
         for _ in range(10):
             rclpy.spin_once(self, timeout_sec=0.05)
         return self.q_now.copy()
 
-    def wait_ready(self):
+    def wait_ready(self): # Prije početka čeka: konfiguraciju ormarića, stanje zglobova, tri MoveIt servisa, dvije MoveIt akcije.
         self.get_logger().info('Čekam /cabinet/config, /joint_states i MoveIt ...')
         self.spin_until(lambda: self.cfg is not None, 30.0, '/cabinet/config')
         self.spin_until(lambda: self.q_now is not None, 30.0, '/joint_states')
@@ -159,8 +148,8 @@ class DoorOpener(Node):
                 raise RuntimeError('Akcije MoveIt-a nisu dostupne')
 
     # ------------------------------------------------------------ poze (jednadžba (3))
-    def tcp(self, theta, drop=cu.DROP, clearance=0.0):
-        return cu.T_W_TCP(self.cfg, theta, cu.INSET, drop, clearance)
+    def tcp(self, theta, drop=cu.DROP, clearance=0.0): # Ulazi su kut vrata, visina u odnosu na gornji rub (drop) i odmak od plohe (clearance)
+        return cu.T_W_TCP(self.cfg, theta, cu.INSET, drop, clearance) # Poza vrha prsta u svijetu
 
     # ------------------------------------------------------------ planning scene
     def set_scene(self, theta, with_door=True):
@@ -177,7 +166,7 @@ class DoorOpener(Node):
                 o.primitives = [prim]
                 o.pose = pose_msg(T)
                 o.primitive_poses = [Pose()]
-                o.operation = CollisionObject.ADD       # ADD postojećeg id-a = zamjena
+                o.operation = CollisionObject.ADD       # Ako objekt s tim imenom već postoji, zamijeni se, pa se tako krilo “pomiče” na novi kut.
             objs.append(o)
         req = ApplyPlanningScene.Request()
         req.scene = PlanningScene(is_diff=True)
@@ -186,15 +175,15 @@ class DoorOpener(Node):
             raise RuntimeError('ApplyPlanningScene nije uspio')
 
     # ------------------------------------------------------------ MoveIt servisi
-    def ik(self, T, seed):
+    def ik(self, T, seed): # inverzna kinematika
         req = GetPositionIK.Request()
         r = req.ik_request
         r.group_name = GROUP
         r.ik_link_name = TCP
         r.avoid_collisions = True
         r.pose_stamped.header.frame_id = FRAME
-        r.pose_stamped.pose = pose_msg(T)
-        r.robot_state = robot_state(seed)
+        r.pose_stamped.pose = pose_msg(T) # željena poza prsta
+        r.robot_state = robot_state(seed) # Seed odakle solver kreće
         r.timeout = Duration(seconds=0.1).to_msg()
         res = self.call(self.ik_client, req)
         if res.error_code.val != 1:
@@ -204,6 +193,8 @@ class DoorOpener(Node):
 
     def cartesian(self, q_start, poses):
         """Cartesian putanja TCP-a kroz poze iz stanja q_start -> (niz q, fraction)."""
+        # MoveIt vodi prst ravnom linijom od trenutne pozicije do prve poze, pa do druge, …, 
+        # u koracima od 5 mm, i za svaki korak računa IK (sjeme je prethodni korak, pa ruka ostaje u istoj konfiguraciji).
         req = GetCartesianPath.Request()
         req.header.frame_id = FRAME
         req.start_state = robot_state(q_start)
@@ -214,18 +205,20 @@ class DoorOpener(Node):
         req.jump_threshold = 0.0            # skokove provjeravamo sami (MAX_JUMP)
         req.avoid_collisions = True
         res = self.call(self.cart_client, req)
-        qs = [np.array(p.positions) for p in res.solution.joint_trajectory.points]
+        qs = [np.array(p.positions) for p in res.solution.joint_trajectory.points] # niz kutova zglobova, po jedan za svaku točku putanje.
         names = list(res.solution.joint_trajectory.joint_names)
         if not qs:
             return [np.array(q_start)], 0.0
         idx = [names.index(j) for j in ARM_JOINTS]
         qs = [q[idx] for q in qs]
-        fraction = res.fraction
+        fraction = res.fraction # koji dio puta je uspio (1.0 = cijeli)
         for i in range(1, len(qs)):                      # odreži na prvom skoku
             if np.abs(qs[i] - qs[i - 1]).max() > MAX_JUMP:
                 fraction *= i / len(qs)
                 qs = qs[:i]
                 break
+        # Ako se neki zglob između dvije točke (5 mm pomaka prsta) promijeni više od 0.3 rad, IK je “preskočio” u drugu konfiguraciju ruke. 
+        # To bi bio nagli i opasan pokret, pa se putanja tu odreže i fraction se smanji.
         return qs, fraction
 
     # ------------------------------------------------------------ planiranje
@@ -233,27 +226,28 @@ class DoorOpener(Node):
         """Isplanira sve dijelove gibanja za jednu konfiguraciju ruke; vraća rječnik ili None."""
         th0 = float(self.cfg['initial_angle_deg'])
         thetas = np.arange(th0 + self.step, self.theta_max + 1e-9, self.step)
-        T_pre = self.tcp(th0, drop=-self.pre_height, clearance=self.gap)
-        T_gap = self.tcp(th0, clearance=self.gap)
+        T_pre = self.tcp(th0, drop=-self.pre_height, clearance=self.gap) # poza prije kontakta
+        T_gap = self.tcp(th0, clearance=self.gap) # prst iza krila
         T_contact = self.tcp(th0, clearance=-self.press)
-        pulls = [self.tcp(th, clearance=-self.press) for th in thetas]
+        pulls = [self.tcp(th, clearance=-self.press) for th in thetas] # niz kontaktnih poza
 
         q_ref = self.current_q()
         best = None
         seeds = [q_ref] + [self.rng.uniform(-np.pi, np.pi, 6) for _ in range(self.attempts)]
         for n, seed in enumerate(seeds):
             self.set_scene(th0, with_door=True)
-            q_gap = self.ik(T_gap, seed)                  # prst iza krila, bez dodira
+            q_gap = self.ik(T_gap, seed)                  # za pozu prst iza krila, odabire konfig. ruke
             if q_gap is None:
                 continue
-            q_gap = nearest_turn(q_gap, q_ref)
-            q_pre = self.ik(T_pre, q_gap)                 # ista konfiguracija ruke
+            q_gap = nearest_turn(q_gap, q_ref) # ispravak 2pi
+            q_pre = self.ik(T_pre, q_gap)                 # ik za pozu prije kontakta, ista konfiguracija ruke
             if q_pre is None or np.abs(q_pre - q_gap).max() > 1.0:
                 continue
+            # Cartesian za svaki dio pokreta (spuštanje, dodir, povlačenje, odmak)
             down, f_down = self.cartesian(q_pre, [T_gap])
             if f_down < 0.999:
                 continue
-            self.set_scene(th0, with_door=False)          # dalje prst dodiruje krilo
+            self.set_scene(th0, with_door=False)          
             touch, f_touch = self.cartesian(down[-1], [T_contact])
             if f_touch < 0.999:
                 continue
@@ -274,7 +268,7 @@ class DoorOpener(Node):
         return best
 
     # ------------------------------------------------------------ izvršavanje
-    def move_to_joints(self, q, label):
+    def move_to_joints(self, q, label): # koristi MoveIt akciju move_action
         req = MotionPlanRequest()
         req.group_name = GROUP
         req.pipeline_id = 'ompl'
@@ -303,8 +297,7 @@ class DoorOpener(Node):
         self.get_logger().info(f'[{label}] error_code = {code} ({status})')
         return code == 1
 
-    def trajectory(self, qs, dt_min):
-        """Vremena točaka: ograničena brzina zglobova i najmanje dt_min po točki."""
+    def trajectory(self, qs, dt_min): # točkama putanje dodijeli vremena i brzine
         qs = np.asarray(qs)
         t = [0.0]
         for i in range(1, len(qs)):
@@ -321,7 +314,7 @@ class DoorOpener(Node):
                 time_from_start=Duration(seconds=float(ti)).to_msg()))
         return jt
 
-    def execute(self, qs, label):
+    def execute(self, qs, label): # koristi akciju execute_trajectory
         if len(qs) < 2:
             return True
         q_now = self.current_q()
@@ -366,17 +359,23 @@ class DoorOpener(Node):
         if self.check_only:
             return 0
 
+        # Iz home se slobodno kreće do položaja iznad gornjeg ruba vrata
         if not self.move_to_joints(p['q_pre'], '1 OMPL do poze prije kontakta'):
             return 3
+        # prst se spušta ravno dolje iza krila
         if not self.execute(p['down'], '2 spuštanje prsta iza krila'):
             return 4
+        # prst se primakne krilu i dodirne ga s unutarnje strane
         self.set_scene(th0, with_door=False)
         if not self.execute(p['touch'], '3 kontakt s unutarnjom plohom'):
             return 5
+        # prst gura krilo po luku vrata
         if not self.execute(p['pull'], f'4 povlačenje {th0:.0f} -> {p["theta_end"]:.0f} deg'):
             return 6
+        # prst se odmakne od krila i podigne iznad njega
         if not self.execute(p['out'], '5 odmak i podizanje prsta'):
             return 7
+        # robot se vraća u home zaobilazeći otvorena vrata
         self.set_scene(p['theta_end'], with_door=True)
         self.move_to_joints(HOME, '6 OMPL home')
         self.get_logger().info(f'Gotovo: vrata otvorena na ~{p["theta_end"]:.1f} deg')

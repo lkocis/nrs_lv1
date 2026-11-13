@@ -27,21 +27,21 @@ from nrs_lv1_tasks import cabinet_utils as cu
 
 
 def tf_to_matrix(msg):
-    t, q = msg.transform.translation, msg.transform.rotation
-    return cu.make_T(cu.R_from_quat([q.x, q.y, q.z, q.w]), [t.x, t.y, t.z])
+    t, q = msg.transform.translation, msg.transform.rotation  #iz poruke uzme pomak t (x, y, z) i rotaciju q (kvaternion x, y, z, w).
+    return cu.make_T(cu.R_from_quat([q.x, q.y, q.z, q.w]), [t.x, t.y, t.z])  #kvaternion pretvori u rotacijsku matricu (R_from_quat) i od nje i pomaka složi homogenu matricu 4×4 (make_T).
 
 
 def compare(name, T_calc, T_ref):
-    dp = np.linalg.norm(T_calc[:3, 3] - T_ref[:3, 3])
-    dr = np.rad2deg(cu.rot_angle_between(T_calc[:3, :3], T_ref[:3, :3]))
-    ok = 'OK' if dp < 1e-4 and dr < 1e-2 else 'RAZLIKA!'
+    dp = np.linalg.norm(T_calc[:3, 3] - T_ref[:3, 3])  #T[:3, 3] su prva tri retka zadnjeg stupca. Razlika dva pomaka je udaljenost između dvije točke u metrima.
+    dr = np.rad2deg(cu.rot_angle_between(T_calc[:3, :3], T_ref[:3, :3]))   #T[:3, :3] je rotacijski dio. rot_angle_between izračuna kut rotacije koja prevodi jednu orijentaciju u drugu, a rad2deg ga pretvori u stupnjeve.
+    ok = 'OK' if dp < 1e-4 and dr < 1e-2 else 'RAZLIKA!'  #ako je razlika položaja manja od 0.1 mm (1e-4 m) i razlika orijentacije manja od 0.01°, rezultat je “OK”, inače “RAZLIKA!”.
     print(f'  {name:<36s} |dp| = {dp * 1000:8.4f} mm   |dR| = {dr:8.5f} deg   {ok}')
 
 
 class Task2(Node):
     def __init__(self):
         super().__init__('task2_cabinet')
-        self.cfg = None
+        self.cfg = None  #tu će se spremiti konfiguracija ormarića.
         self.create_subscription(
             String, '/cabinet/config', self.on_config,
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
@@ -49,7 +49,7 @@ class Task2(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
     def on_config(self, msg):
-        if self.cfg is None:
+        if self.cfg is None:  #poziva se kad stigne poruka. msg.data je JSON tekst, a parse_config ga pretvori u rječnik s numpy matricama
             self.cfg = cu.parse_config(msg.data)
 
     def lookup(self, child):
@@ -63,6 +63,7 @@ class Task2(Node):
 
 def report(node, cfg):
     np.set_printoptions(precision=4, suppress=True, linewidth=120)
+    # z konfiguracije uzme μ (strana zgloba), položaj ormarića (x, y, z, yaw), dimenzije krila (debljina, širina, visina) i početni kut θ₀.
     mu = cfg['axis_pos']
     x, y, z, yaw = cfg['pose']
     lx, ly, lz = cu.door_size(cfg)
@@ -72,9 +73,9 @@ def report(node, cfg):
     print(f'  l = [lx ly lz] = [{lx:.3f} {ly:.3f} {lz:.3f}] m,  mu = {mu},  theta0 = {theta0} deg')
 
     print('\n=== ^W T_O ===')
-    print(cu.T_W_O(cfg))
+    print(cu.T_W_O(cfg)) # ormarić u svijetu, izračunat iz pose.
     print('\n=== ^O T_A (T_A_cabinet_closed) ===')
-    print(cu.T_O_A(cfg))
+    print(cu.T_O_A(cfg)) # osi zgloba u okviru ormarića, iz poruke.
 
     T_WA = cu.T_W_A(cfg)
     print('\n=== Os rotacije vrata u svijetu (^W T_A) ===')
@@ -86,7 +87,7 @@ def report(node, cfg):
     print(T_AD)
     compare('jedn. (1) vs T_D_hinge_closed', T_AD, cfg['T_D_hinge_closed'])
 
-    T_WD = cu.T_W_D(cfg, theta0)
+    T_WD = cu.T_W_D(cfg, theta0) # početni položaj sustava S_D u svijetu.
     print(f'\n=== Jednadžba (2): ^W T_D(phi), phi = mu*theta0 = {mu * theta0:.1f} deg ===')
     print(T_WD)
 

@@ -126,4 +126,13 @@ razlika orijentacije |ΔR| = kut rotacije koja prevodi jednu orijentaciju u drug
 Naredba: ros2 run nrs_lv1_tasks task2_cabinet --ros-args -p use_sim_time:=true
 Ispis redom: konfiguracija ormarića, ^W T_O, ^O T_A, os rotacije u svijetu (točka i smjer), ^A T_D(0) s usporedbom, ^W T_D(φ) i na kraju tablica usporedbi s OK.
 
+UKRATKO ZA ZAD 2: 
+1. pokreni ROS, stvori čvor (pretplata na /cabinet/config, TF slušač)
+2. čekaj do 20 s da stigne konfiguracija
+3. izračunaj:  ^W T_O,  ^W T_A (os vrata),  ^A T_D(0) [jedn. 1],  ^W T_D(φ₀) [jedn. 2]
+4. usporedi:   jedn. (1) ↔ T_D_hinge_closed
+               jedn. (2) ↔ T_D_world_initial
+               jedn. (2) ↔ TF cabinet_D_initial
+5. ugasi čvor
+
 3) 
